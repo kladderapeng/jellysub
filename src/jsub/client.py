@@ -267,7 +267,7 @@ class JellyfinClient:
         ]
         if prefix_hits:
             return prefix_hits
-        # fallback: the item path must CONTAIN the target's components as a
+        # fallback 1: the item path must CONTAIN the target's components as a
         # contiguous run, ignoring the first component of the target (the
         # mount-point name often differs: /mnt vs /srv vs /data)
         n = len(target_parts)
@@ -289,8 +289,27 @@ class JellyfinClient:
                     continue
                 break
         if suffix_hits:
-            log.info("path lookup %s: matched %d items by suffix", target, len(suffix_hits))
-        return suffix_hits
+            log.info("path lookup %s: matched %d items by path-run", target, len(suffix_hits))
+            return suffix_hits
+        # fallback 2: match on the target's last 2 components (e.g.
+        # "Season 01/S01E01.mp4" or "Friends/Season 01") anywhere in the path
+        tail = target_parts[-2:] if n >= 2 else target_parts
+        tail_hits = []
+        for it in items:
+            if not it.path:
+                continue
+            parts = [p for p in norm(it.path).split(os.sep) if p]
+            m = len(tail)
+            for start in range(0, len(parts) - m + 1):
+                if parts[start : start + m] == tail:
+                    tail_hits.append(it)
+                    break
+        if tail_hits:
+            log.info("path lookup %s: matched %d items by trailing components %s", target, len(tail_hits), tail)
+            return tail_hits
+        sample = [it.path for it in items if it.path][:5]
+        log.info("path lookup %s: NO match; sample item paths: %s", target, sample)
+        return []
 
     def get_item(self, item_id: str) -> Item:
         data = self._get_json(

@@ -144,3 +144,31 @@ def test_suffix_fallback_matches_different_mount_prefix(client):
 def test_libraries_media_only_false_includes_other_types(client):
     libs = client.libraries(media_only=False)
     assert any(l.get("CollectionType") == "tvshows" for l in libs)
+
+
+def test_tail_component_fallback(client):
+    # only the last two components match: "Season 01/S01E02.mp4"
+    items = client.find_items_by_path("/anywhere/else/Season 01/S01E02.mp4")
+    assert [i.id for i in items] == ["e2"]
+
+
+def test_verbose_short_flag_merges_before_subcommand(capsys, monkeypatch):
+    import jsub.__main__ as m
+
+    class FakeClient:
+        def libraries(self):
+            return [{"Name": "TV", "ItemId": LIB_ID, "CollectionType": "tvshows"}]
+
+        def list_items(self, parent_id=None):
+            return []
+
+    monkeypatch.setattr(m, "build_client", lambda cfg: FakeClient())
+    monkeypatch.setattr(m, "load_config", lambda args: {"url": "x", "api_key": "y"})
+    seen = {}
+    orig = m.logging.basicConfig
+    def spy(**kw):
+        seen.update(kw)
+        return orig(**kw)
+    monkeypatch.setattr(m.logging, "basicConfig", spy)
+    m.main(["-v", "scan"])
+    assert seen.get("level") == m.logging.DEBUG

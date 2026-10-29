@@ -149,28 +149,29 @@ def main(argv: list[str] | None = None) -> int:
                     ("info", "scan", "fetch", "fit", "run", "align")), None)
     if sub_pos is not None:
         before = argv[:sub_pos]
-        for action in parser._actions:
-            flag = f"--{action.dest.replace('_', '-')}"
-            if flag in before and getattr(args, action.dest) in (None, False):
-                for i, a in enumerate(before):
-                    if a == flag and i + 1 < len(before):
-                        val = before[i + 1]
-                        if action.dest == "dry_run" or action.dest == "verbose":
-                            setattr(args, action.dest, True)
-                        elif action.type is float:
-                            setattr(args, action.dest, float(val))
-                        else:
-                            setattr(args, action.dest, val)
-                        break
-                    if a.startswith(flag + "="):
-                        val = a.split("=", 1)[1]
-                        if action.dest in ("dry_run", "verbose"):
-                            setattr(args, action.dest, True)
-                        elif action.type is float:
-                            setattr(args, action.dest, float(val))
-                        else:
-                            setattr(args, action.dest, val)
-                        break
+        flags = {f"--{a.dest.replace('_', '-')}": a for a in parser._actions}
+        flags["-v"] = flags.get("--verbose")
+        for i, a in enumerate(before):
+            action = None
+            val = None
+            if a in flags:
+                action = flags[a]
+                if action.dest in ("dry_run", "verbose", "help"):
+                    val = True
+                elif i + 1 < len(before):
+                    val = before[i + 1]
+            elif "=" in a and a.split("=", 1)[0] in flags:
+                action = flags[a.split("=", 1)[0]]
+                val = a.split("=", 1)[1]
+            if action is None or action.dest == "help":
+                continue
+            if getattr(args, action.dest) in (None, False):
+                if action.dest in ("dry_run", "verbose"):
+                    setattr(args, action.dest, True)
+                elif action.type is float:
+                    setattr(args, action.dest, float(val))
+                else:
+                    setattr(args, action.dest, val)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

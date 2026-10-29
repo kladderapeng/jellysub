@@ -1,0 +1,119 @@
+"""verify_item without an OpenSubtitles API key: candidates via the Jellyfin
+plugin search, sidecar SRT read back from the media directory."""
+
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+import pytest
+
+import jsub.verify as verify_mod
+from jsub.asr import Word
+from jsub.client import Item, JellyfinClient
+from jsub.verify import VerifyConfig, verify_item
+
+ITEM_ID = "44444444444444444444444444444444"
+
+SRT_RIGHT = (
+    "1\n00:00:10,000 --> 00:00:14,000\nwe are going to test this thing right now\n\n"
+    "2\n00:00:40,000 --> 00:00:44,000\nanother line of speech for the second cue\n\n"
+    "3\n00:01:10,000 --> 00:01:14,000\na third distinct passage spoken aloud\n\n"
+    "4\n00:01:40,000 --> 00:01:44,000\nand a fourth one for more anchors\n"
+)
+
+CUES = [
+    (10.0, "we are going to test this thing right now"),
+    (40.0, "another line of speech for the second cue"),
+    (70.0, "a third distinct passage spoken aloud"),
+    (100.0, "and a fourth one for more anchors"),
+]
+
+
+def fake_words(*args, **kwargs):
+    words = []
+    for sub_start_s, text in CUES:
+        t = sub_start_s + 0.7
+        for w in text.split():
+            words.append(Word(start=t, end=t + 0.4, text=w))
+            t += 0.5
+    return words
+
+
+class Handler(BaseHTTPRequestHandler):
+    uploads = []
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, obj=None, status=200):
+        body = json.dumps(obj or {}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path == f"/Items/{ITEM_ID}/Remote/Subtitles/Search":
+            return self._send([
+                {"Id": "sub1", "Name": "Movie.en.srt", "Language": "eng", "Format": "srt", "Score": 90, "DownloadCount": 500},
+            ])
+        return self._send({}, 404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b""
+        path = urlparse(self.path).path
+        if path == f"/Items/{ITEM_ID}/Remote/Subtitles/sub1":
+            return self._send({}, 204)
+        if path == f"/Videos/{ITEM_ID}/Subtitles":
+            Handler.uploads.append(json.loads(body.decode()))
+            return self._send({}, 204)
+        if path == f"/Items/{ITEM_ID}/Refresh":
+            return self._send({}, 204)
+        return self._send({}, 404)
+
+
+@pytest.fixture()
+def server():
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{httpd.server_port}"
+    httpd.shutdown()
+
+
+def test_plugin_fallback_without_api_key(server, monkeypatch, tmp_path):
+    Handler.uploads.clear()
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    media = media_dir / "Movie.mkv"
+    media.write_bytes(b"\0" * 300_000)
+    sidecar = media_dir / "Movie.en.srt"
+    sidecar.write_text(SRT_RIGHT)
+    item = Item(id=ITEM_ID, name="Movie", type="Movie", path=str(media),
+                runtime_ticks=200 * 10_000_000, provider_ids={"Imdb": "tt9"},
+                media_source_id="s")
+    client = JellyfinClient(server, "k")
+    monkeypatch.setattr(verify_mod, "transcribe_media", lambda *a, **k: fake_words())
+    cfg = VerifyConfig(language="eng")
+    res = verify_item(client, item, cfg, provider=None)  # no API key at all
+    assert res.action == "aligned"
+    assert "jellyfin-plugin" in res.chosen
+    assert res.anchors >= 3
+    assert Handler.uploads, "corrected subtitle should be uploaded"
+
+
+def test_no_candidates_anywhere(server, monkeypatch, tmp_path):
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"\0" * 300_000)
+    item = Item(id=ITEM_ID, name="Movie", type="Movie", path=str(media),
+                runtime_ticks=200 * 10_000_000, provider_ids={}, media_source_id="s")
+    client = JellyfinClient(server, "k")
+    monkeypatch.setattr(verify_mod, "transcribe_media", lambda *a, **k: fake_words())
+    res = verify_item(client, item, VerifyConfig(language="eng"), provider=None)
+    assert res.action == "no-match"
+    assert "OPENSUBTITLES_API_KEY" in res.detail

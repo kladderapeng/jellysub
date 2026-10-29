@@ -113,6 +113,108 @@ def score_candidates(
     return out
 
 
+def _jellyfin_plugin_candidates(
+    client: JellyfinClient, item: Item, language: str, limit: int
+) -> list[tuple[SubFile, Subtitle]]:
+    """Candidate subtitles via Jellyfin's own remote search (Open Subtitles
+    plugin installed server-side, no API key needed), read back from disk."""
+    from .core import iso639_2_to_3
+
+    cands = client.search_remote_subtitles(item.id, language)
+    lang3 = iso639_2_to_3(language)
+    cands = [
+        c
+        for c in cands
+        if (c.language or "").lower() in (language.lower(), lang3)
+        and (c.format or "srt").lower() in ("srt", "ass", "ssa", "vtt")
+    ]
+    cands.sort(
+        key=lambda c: (
+            float(c.score or 0) + min(c.download_count or 0, 10000) / 100.0
+            + (float(c.community_rating or 0) * 2),
+        ),
+        reverse=True,
+    )
+    subs: list[tuple[SubFile, Subtitle]] = []
+    for cand in cands[:limit]:
+        if not client.download_remote_subtitle(item.id, cand.id):
+            continue
+        text = _read_sidecar_for(client, item, language)
+        if text is None:
+            continue
+        subs.append(
+            (
+                SubFile(
+                    file_id=0,
+                    file_name=cand.name or cand.id,
+                    language=cand.language or language,
+                    format=cand.format or "srt",
+                    download_count=cand.download_count or 0,
+                    rating=float(cand.community_rating or 0),
+                ),
+                parse_srt(text),
+            )
+        )
+    return subs
+
+
+def _read_sidecar_for(client: JellyfinClient, item: Item, language: str) -> str | None:
+    """Read the newest external subtitle file sitting next to the media."""
+    from .client import language_aliases
+
+    if not item.path:
+        return None
+    directory = os.path.dirname(item.path)
+    base = os.path.splitext(os.path.basename(item.path))[0]
+    want = {a.lower() for a in language_aliases(language)}
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return None
+    best: tuple[float, str] | None = None
+    for name in entries:
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in (".srt", ".ass", ".ssa", ".vtt"):
+            continue
+        if not stem.startswith(base):
+            continue
+        parts = stem.split(".")
+        lang_tag = parts[-1].lower() if len(parts) > 1 else ""
+        if lang_tag and lang_tag not in want:
+            continue
+        full = os.path.join(directory, name)
+        try:
+            mtime = os.path.getmtime(full)
+        except OSError:
+            continue
+        if best is None or mtime > best[0]:
+            best = (mtime, full)
+    if best is None:
+        return None
+    with open(best[1], "rb") as f:
+        return decode_subtitle(f.read())
+
+
+def _provider_candidates(
+    provider: OpenSubtitles, item: Item, moviehash: str, language: str, limit: int
+) -> list[tuple[SubFile, Subtitle]]:
+    lang2 = language[:2]
+    hits = provider.search_by_hash(moviehash, languages=lang2)
+    files = provider.best_files(hits, language, limit=limit)
+    if not files:
+        imdb = (item.provider_ids or {}).get("Imdb")
+        if imdb:
+            hits = provider.search_by_imdb(imdb, languages=lang2)
+            files = provider.best_files(hits, language, limit=limit)
+    subs: list[tuple[SubFile, Subtitle]] = []
+    for f in files:
+        try:
+            subs.append((f, parse_srt(decode_subtitle(provider.download(f.file_id)))))
+        except Exception as e:
+            log.warning("[%s] candidate %s failed: %s", item.name, f.file_id, e)
+    return subs
+
+
 def verify_item(
     client: JellyfinClient,
     item: Item,
@@ -121,36 +223,25 @@ def verify_item(
 ) -> VerifyResult:
     if not item.path or not os.path.exists(item.path):
         return VerifyResult(item.id, item.name, "error", detail="media path missing/unreachable")
-    provider = provider or OpenSubtitles()
     moviehash = opensubtitles_hash(item.path)
     runtime_s = (item.runtime_ms or 0) / 1000.0
     log.info("[%s] moviehash=%s runtime=%.0fs", item.name, moviehash, runtime_s)
 
-    lang2 = cfg.language[:2]
-    try:
-        hits = provider.search_by_hash(moviehash, languages=lang2)
-        files = provider.best_files(hits, cfg.language, limit=cfg.candidates)
-        if not files:
-            imdb = (item.provider_ids or {}).get("Imdb")
-            if imdb:
-                hits = provider.search_by_imdb(imdb, languages=lang2)
-                files = provider.best_files(hits, cfg.language, limit=cfg.candidates)
-    except ProviderError as e:
-        return VerifyResult(item.id, item.name, "error", moviehash=moviehash, detail=str(e))
-    if not files:
-        return VerifyResult(item.id, item.name, "no-match", moviehash=moviehash)
-    log.info("[%s] %d candidate subtitle files", item.name, len(files))
-
     subs: list[tuple[SubFile, Subtitle]] = []
-    for f in files:
+    source = "none"
+    if provider is not None and getattr(provider, "api_key", ""):
         try:
-            raw = provider.download(f.file_id)
-            text = decode_subtitle(raw)
-            subs.append((f, parse_srt(text)))
-        except Exception as e:
-            log.warning("[%s] candidate %s failed: %s", item.name, f.file_id, e)
+            subs = _provider_candidates(provider, item, moviehash, cfg.language, cfg.candidates)
+            source = "opensubtitles-api"
+        except ProviderError as e:
+            log.warning("[%s] opensubtitles API failed (%s), falling back to Jellyfin plugin search", item.name, e)
     if not subs:
-        return VerifyResult(item.id, item.name, "error", moviehash=moviehash, detail="all downloads failed")
+        subs = _jellyfin_plugin_candidates(client, item, cfg.language, cfg.candidates)
+        source = "jellyfin-plugin" if subs else source
+    if not subs:
+        return VerifyResult(item.id, item.name, "no-match", moviehash=moviehash,
+                            detail="no candidates (need OPENSUBTITLES_API_KEY or the Open Subtitles plugin in Jellyfin)")
+    log.info("[%s] %d candidate subtitle files via %s", item.name, len(subs), source)
 
     words = transcribe_media(item.path, runtime_s, cfg)
     log.info("[%s] ASR produced %d words", item.name, len(words))
@@ -173,7 +264,7 @@ def verify_item(
     )
     result = VerifyResult(
         item.id, item.name, "aligned", moviehash=moviehash,
-        chosen=best.file.file_name, speed=al.speed, offset_s=al.offset_s,
+        chosen=f"{best.file.file_name} [{source}]", speed=al.speed, offset_s=al.offset_s,
         rms_s=al.rms_s, anchors=len(al.anchors), corrected_srt=srt_out,
     )
     if cfg.dry_run:

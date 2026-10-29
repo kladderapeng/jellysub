@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg=cfg.get("ffmpeg"),
             dry_run=bool(cfg.get("dry_run", False)),
         )
-        provider = OpenSubtitles()
+        provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
         lib_ids = None
         if cfg.get("libraries"):
             lib_ids = [x.strip() for x in str(cfg["libraries"]).split(",") if x.strip()]

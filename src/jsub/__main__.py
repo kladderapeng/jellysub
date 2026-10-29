@@ -40,6 +40,7 @@ def load_config(args: argparse.Namespace) -> dict:
         "window_seconds": "JSUB_WINDOW_SECONDS",
         "model_dir": "JSUB_MODEL_DIR",
         "ffmpeg": "FFMPEG_PATH",
+        "media_root": "JSUB_MEDIA_ROOT",
     }
     for key, env in env_map.items():
         if os.environ.get(env):
@@ -58,6 +59,8 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["libraries"] = args.libraries
     if getattr(args, "path", None):
         cfg["path"] = args.path
+    if getattr(args, "media_root", None):
+        cfg["media_root"] = args.media_root
     return cfg
 
 
@@ -104,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--offset-ms", type=float, help="subtitle timing offset in ms")
     common.add_argument("--libraries", help="comma separated library ids to limit scan")
     common.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
+    common.add_argument("--media-root", help="local mount point corresponding to Jellyfin's media root, e.g. /mnt when Jellyfin sees /media/... (used by align to read files)")
     common.add_argument("--dry-run", action="store_true", help="do not modify anything")
     common.add_argument("--verbose", "-v", action="store_true")
     parser = argparse.ArgumentParser(
@@ -111,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    local_sub = None
     for name, help_text in [
         ("info", "show server info"),
         ("scan", "list libraries and items missing subtitles"),
@@ -118,9 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
         ("fit", "re-time existing subtitles (offset + clamp to runtime)"),
         ("run", "fetch and fit in one pass"),
         ("align", "verify+align subtitles against the media audio (runs on the server)"),
+        ("local", "align a subtitle for a local media file directly (no Jellyfin); writes <name>.<lang>.srt next to the file"),
     ]:
-        sub.add_parser(name, parents=[common], help=help_text)
-    parser.set_defaults(_common=common)
+        sp = sub.add_parser(name, parents=[common], help=help_text)
+        if name == "local":
+            sp.add_argument("file", nargs="?", help="media file path to align")
     return parser
 
 
@@ -178,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     cfg = load_config(args)
-    client = build_client(cfg)
+    client = build_client(cfg) if args.command != "local" else None
 
     if args.command == "info":
         info = client.server_info()
@@ -211,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
             model_dir=cfg.get("model_dir"),
             ffmpeg=cfg.get("ffmpeg"),
             dry_run=bool(cfg.get("dry_run", False)),
+            media_root=cfg.get("media_root"),
         )
         provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
         from .pipeline import collect_items
@@ -236,6 +244,35 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(json.dumps(counts, indent=2))
         return 0
+
+    if args.command == "local":
+        from .local import align_local_file
+        from .providers import OpenSubtitles
+
+        media_path = getattr(args, "file", None) or cfg.get("path")
+        if not media_path:
+            print("error: local needs a file path (positional arg or --path FILE)", file=sys.stderr)
+            return 2
+        vcfg = VerifyConfig(
+            language=(str(cfg.get("languages", "eng")).split(",")[0].strip()),
+            candidates=int(cfg.get("candidates", 5)),
+            windows=int(cfg.get("windows", 3)),
+            window_seconds=float(cfg.get("window_seconds", 45.0)),
+            model_dir=cfg.get("model_dir"),
+            ffmpeg=cfg.get("ffmpeg"),
+            dry_run=bool(cfg.get("dry_run", False)),
+        )
+        provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
+        res = align_local_file(media_path, vcfg.language, vcfg, provider)
+        log.info(
+            "%-12s %s -> %s speed=%.5f offset=%.2fs rms=%.3fs anchors=%d %s",
+            res.action, res.media_path, res.out_path, res.speed, res.offset_s, res.rms_s,
+            res.anchors, res.detail,
+        )
+        print(json.dumps({"action": res.action, "out": res.out_path, "chosen": res.chosen,
+                          "speed": res.speed, "offset_s": res.offset_s, "rms_s": res.rms_s,
+                          "anchors": res.anchors, "detail": res.detail}, indent=2))
+        return 0 if res.action in ("aligned", "would-align") else 1
 
     pipe = build_pipeline_config(cfg, args)
     try:

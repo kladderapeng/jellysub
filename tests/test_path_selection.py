@@ -172,3 +172,17 @@ def test_verbose_short_flag_merges_before_subcommand(capsys, monkeypatch):
     monkeypatch.setattr(m.logging, "basicConfig", spy)
     m.main(["-v", "scan"])
     assert seen.get("level") == m.logging.DEBUG
+
+
+def test_resolve_media_path(tmp_path):
+    from jsub.verify import resolve_media_path
+
+    # server path /media/x, locally under tmp_path
+    local = tmp_path / "media" / "series" / "F" / "S01E01.mp4"
+    local.parent.mkdir(parents=True)
+    local.touch()
+    assert resolve_media_path("/media/series/F/S01E01.mp4", media_root=str(tmp_path)) == str(local)
+    # as-is when it exists
+    assert resolve_media_path(str(local)) == str(local)
+    # unreachable
+    assert resolve_media_path("/nope/nothing.mkv", media_root=str(tmp_path)) is None

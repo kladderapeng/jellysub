@@ -37,6 +37,27 @@ class VerifyConfig:
     audio_index: int = 0
     ffmpeg: str | None = None
     dry_run: bool = False
+    media_root: str | None = None
+
+
+def resolve_media_path(server_path: str, media_root: str | None = None) -> str | None:
+    """Map Jellyfin's server-side item path to a locally readable path.
+
+    Tries the path as-is, then re-rooted under media_root (e.g. Jellyfin sees
+    /media/series/... but locally it is /mnt/media/series/...), matching on
+    the trailing components so any prefix difference is tolerated.
+    """
+    candidates = [server_path]
+    if media_root:
+        root = media_root.rstrip(os.sep)
+        candidates.append(root + server_path)
+        parts = [p for p in server_path.split(os.sep) if p]
+        for skip in range(1, len(parts)):
+            candidates.append(os.path.join(root, *parts[skip:]))
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return None
 
 
 @dataclass
@@ -114,7 +135,7 @@ def score_candidates(
 
 
 def _jellyfin_plugin_candidates(
-    client: JellyfinClient, item: Item, language: str, limit: int
+    client: JellyfinClient, item: Item, language: str, limit: int, media_root: str | None = None
 ) -> list[tuple[SubFile, Subtitle]]:
     """Candidate subtitles via Jellyfin's own remote search (Open Subtitles
     plugin installed server-side, no API key needed), read back from disk."""
@@ -139,7 +160,7 @@ def _jellyfin_plugin_candidates(
     for cand in cands[:limit]:
         if not client.download_remote_subtitle(item.id, cand.id):
             continue
-        text = _read_sidecar_for(client, item, language)
+        text = _read_sidecar_for(client, item, language, media_root)
         if text is None:
             continue
         subs.append(
@@ -158,14 +179,15 @@ def _jellyfin_plugin_candidates(
     return subs
 
 
-def _read_sidecar_for(client: JellyfinClient, item: Item, language: str) -> str | None:
+def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_root: str | None = None) -> str | None:
     """Read the newest external subtitle file sitting next to the media."""
     from .client import language_aliases
 
     if not item.path:
         return None
-    directory = os.path.dirname(item.path)
-    base = os.path.splitext(os.path.basename(item.path))[0]
+    local = resolve_media_path(item.path, media_root)
+    directory = os.path.dirname(local or item.path)
+    base = os.path.splitext(os.path.basename(local or item.path))[0]
     want = {a.lower() for a in language_aliases(language)}
     try:
         entries = os.listdir(directory)
@@ -221,9 +243,14 @@ def verify_item(
     cfg: VerifyConfig,
     provider: OpenSubtitles | None = None,
 ) -> VerifyResult:
-    if not item.path or not os.path.exists(item.path):
-        return VerifyResult(item.id, item.name, "error", detail="media path missing/unreachable")
-    moviehash = opensubtitles_hash(item.path)
+    local_path = resolve_media_path(item.path or "", cfg.media_root)
+    if local_path is None:
+        return VerifyResult(
+            item.id, item.name, "error",
+            detail=f"media path missing/unreachable: {item.path}"
+                   + (f" (media_root={cfg.media_root})" if cfg.media_root else ""),
+        )
+    moviehash = opensubtitles_hash(local_path)
     runtime_s = (item.runtime_ms or 0) / 1000.0
     log.info("[%s] moviehash=%s runtime=%.0fs", item.name, moviehash, runtime_s)
 
@@ -236,14 +263,14 @@ def verify_item(
         except ProviderError as e:
             log.warning("[%s] opensubtitles API failed (%s), falling back to Jellyfin plugin search", item.name, e)
     if not subs:
-        subs = _jellyfin_plugin_candidates(client, item, cfg.language, cfg.candidates)
+        subs = _jellyfin_plugin_candidates(client, item, cfg.language, cfg.candidates, cfg.media_root)
         source = "jellyfin-plugin" if subs else source
     if not subs:
         return VerifyResult(item.id, item.name, "no-match", moviehash=moviehash,
                             detail="no candidates (need OPENSUBTITLES_API_KEY or the Open Subtitles plugin in Jellyfin)")
     log.info("[%s] %d candidate subtitle files via %s", item.name, len(subs), source)
 
-    words = transcribe_media(item.path, runtime_s, cfg)
+    words = transcribe_media(local_path, runtime_s, cfg)
     log.info("[%s] ASR produced %d words", item.name, len(words))
     if not words:
         return VerifyResult(item.id, item.name, "error", moviehash=moviehash, detail="ASR produced no words")

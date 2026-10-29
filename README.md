@@ -134,6 +134,19 @@ jsub align --languages eng                  # verify + align all items
 jsub align --languages deu --dry-run        # preview, upload nothing
 ```
 
+### local mode (no Jellyfin at all)
+
+If you just have a media file, skip Jellyfin entirely — `local` works directly
+on the file and writes the corrected subtitle next to it as
+`<name>.<lang>.srt`:
+
+```bash
+jsub local /mnt/media/movies/Movie\ (1920)/Movie.mkv --languages eng
+# candidates: sidecar .srt next to the file, or opensubtitles.com by moviehash
+# when OPENSUBTITLES_API_KEY is set
+jsub local Movie.mkv --dry-run              # preview, write nothing
+```
+
 How it works, per item:
 
 1. **Identify the file**: compute the OpenSubtitles *moviehash* of the media

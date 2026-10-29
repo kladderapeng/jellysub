@@ -229,25 +229,18 @@ class JellyfinClient:
 
         Matches against the item Path field, so it works for both a single
         file (/data/series/Friends/Season 01/S01E01.mp4) and a directory
-        (/data/movies/Movie (1920), matched recursively).
+        (/data/movies/Movie (1920), matched recursively). Iterates the
+        libraries with parentId, because a global /Items query without
+        parentId returns nothing on many server versions.
         """
         target = os.path.normpath(path).rstrip(os.sep)
-        params = {
-            "Recursive": "true" if recursive else "false",
-            "IncludeItemTypes": ",".join(MEDIA_TYPES),
-            "Fields": "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds",
-            "Limit": 500,
-        }
         items: list[Item] = []
-        start = 0
-        while True:
-            data = self._get_json("/Items", params={**params, "StartIndex": start}) or {}
-            batch = [Item.from_dict(d) for d in data.get("Items", [])]
-            items.extend(batch)
-            total = int(data.get("TotalRecordCount", len(items)))
-            start += len(batch)
-            if not batch or start >= total:
-                break
+        for lib in self.libraries():
+            lib_id = lib.get("ItemId") or lib.get("Id") or ""
+            try:
+                items.extend(self.list_items(parent_id=lib_id or None))
+            except JellyfinError:
+                continue
         out = []
         for it in items:
             p = it.path

@@ -95,27 +95,82 @@ def build_pipeline_config(cfg: dict, args: argparse.Namespace) -> PipelineConfig
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", help="path to JSON config file")
+    common.add_argument("--url", help="Jellyfin base URL, e.g. http://localhost:8096")
+    common.add_argument("--api-key", help="Jellyfin API key")
+    common.add_argument("--languages", help="comma separated subtitle languages")
+    common.add_argument("--offset-ms", type=float, help="subtitle timing offset in ms")
+    common.add_argument("--libraries", help="comma separated library ids to limit scan")
+    common.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
+    common.add_argument("--dry-run", action="store_true", help="do not modify anything")
+    common.add_argument("--verbose", "-v", action="store_true")
     parser = argparse.ArgumentParser(
-        prog="jsub", description="Automate Jellyfin subtitle fetching and fitting."
+        prog="jsub", description="Automate Jellyfin subtitle fetching and fitting.",
+        parents=[common],
     )
-    parser.add_argument("--config", help="path to JSON config file")
-    parser.add_argument("--url", help="Jellyfin base URL, e.g. http://localhost:8096")
-    parser.add_argument("--api-key", help="Jellyfin API key")
-    parser.add_argument("--languages", help="comma separated subtitle languages")
-    parser.add_argument("--offset-ms", type=float, help="subtitle timing offset in ms")
-    parser.add_argument("--libraries", help="comma separated library ids to limit scan")
-    parser.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
-    parser.add_argument("--dry-run", action="store_true", help="do not modify anything")
-    parser.add_argument("--verbose", "-v", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("info", help="show server info")
-    sub.add_parser("scan", help="list libraries and items missing subtitles")
-    sub.add_parser("fetch", help="download best remote subtitles for items missing them")
-    sub.add_parser("fit", help="re-time existing subtitles (offset + clamp to runtime)")
-    sub.add_parser("run", help="fetch and fit in one pass")
-    sub.add_parser("align", help="verify+align subtitles against the media audio (runs on the server)")
+    for name, help_text in [
+        ("info", "show server info"),
+        ("scan", "list libraries and items missing subtitles"),
+        ("fetch", "download best remote subtitles for items missing them"),
+        ("fit", "re-time existing subtitles (offset + clamp to runtime)"),
+        ("run", "fetch and fit in one pass"),
+        ("align", "verify+align subtitles against the media audio (runs on the server)"),
+    ]:
+        sub.add_parser(name, parents=[common], help=help_text)
+    parser.set_defaults(_common=common)
+    return parser
+
+
+def _merge_common_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Fill in options given before the subcommand when the subparser's own
+    value is the default (argparse subparsers don't inherit main-parser
+    values when the flag appears only before the subcommand)."""
+    common = getattr(args, "_common", None)
+    if common is None:
+        return args
+    for action in common._actions:
+        if action.dest in ("help",):
+            continue
+        name = f"--{action.dest.replace('_', '-')}"
+        if name in sys.argv and getattr(args, action.dest) in (None, False, action.default):
+            pass
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+    if argv is None:
+        argv = sys.argv[1:]
+    sub_pos = next((i for i, a in enumerate(argv) if a in
+                    ("info", "scan", "fetch", "fit", "run", "align")), None)
+    if sub_pos is not None:
+        before = argv[:sub_pos]
+        for action in parser._actions:
+            flag = f"--{action.dest.replace('_', '-')}"
+            if flag in before and getattr(args, action.dest) in (None, False):
+                for i, a in enumerate(before):
+                    if a == flag and i + 1 < len(before):
+                        val = before[i + 1]
+                        if action.dest == "dry_run" or action.dest == "verbose":
+                            setattr(args, action.dest, True)
+                        elif action.type is float:
+                            setattr(args, action.dest, float(val))
+                        else:
+                            setattr(args, action.dest, val)
+                        break
+                    if a.startswith(flag + "="):
+                        val = a.split("=", 1)[1]
+                        if action.dest in ("dry_run", "verbose"):
+                            setattr(args, action.dest, True)
+                        elif action.type is float:
+                            setattr(args, action.dest, float(val))
+                        else:
+                            setattr(args, action.dest, val)
+                        break
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,

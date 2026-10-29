@@ -61,6 +61,8 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["path"] = args.path
     if getattr(args, "media_root", None):
         cfg["media_root"] = args.media_root
+    if getattr(args, "sub", None):
+        cfg["sub"] = args.sub
     return cfg
 
 
@@ -108,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--libraries", help="comma separated library ids to limit scan")
     common.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
     common.add_argument("--media-root", help="local mount point corresponding to Jellyfin's media root, e.g. /mnt when Jellyfin sees /media/... (used by align to read files)")
+    common.add_argument("--sub", help="explicit subtitle file to align (local mode), no provider/API key needed")
     common.add_argument("--dry-run", action="store_true", help="do not modify anything")
     common.add_argument("--verbose", "-v", action="store_true")
     parser = argparse.ArgumentParser(
@@ -263,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=bool(cfg.get("dry_run", False)),
         )
         provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
-        res = align_local_file(media_path, vcfg.language, vcfg, provider)
+        res = align_local_file(media_path, vcfg.language, vcfg, provider, sub_path=cfg.get("sub"))
         log.info(
             "%-12s %s -> %s speed=%.5f offset=%.2fs rms=%.3fs anchors=%d %s",
             res.action, res.media_path, res.out_path, res.speed, res.offset_s, res.rms_s,

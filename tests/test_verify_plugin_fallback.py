@@ -117,3 +117,40 @@ def test_no_candidates_anywhere(server, monkeypatch, tmp_path):
     res = verify_item(client, item, VerifyConfig(language="eng"), provider=None)
     assert res.action == "no-match"
     assert "OPENSUBTITLES_API_KEY" in res.detail
+
+
+def test_plugin_search_404_is_graceful(server, monkeypatch, tmp_path):
+    class H404(T.Handler if False else object):
+        pass
+    # reuse existing stub but make search 404: easiest is a new handler
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading, json as _json
+    from urllib.parse import urlparse as _up
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _j(self, obj, status):
+            b = _json.dumps(obj).encode()
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        def do_GET(self):
+            if _up(self.path).path == f"/Items/{ITEM_ID}/Remote/Subtitles/Search":
+                return self._j({"error": "no provider"}, 404)
+            return self._j({}, 404)
+        def do_POST(self):
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    media = tmp_path / "Movie.mkv"
+    media.write_bytes(b"\0" * 300_000)
+    item = Item(id=ITEM_ID, name="Movie", type="Movie", path=str(media),
+                runtime_ticks=200 * 10_000_000, provider_ids={}, media_source_id="s")
+    client = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    monkeypatch.setattr(verify_mod, "transcribe_media", lambda *a, **k: fake_words())
+    res = verify_item(client, item, VerifyConfig(language="eng"), provider=None)
+    assert res.action == "no-match"
+    assert "Open Subtitles plugin" in res.detail or "OPENSUBTITLES_API_KEY" in res.detail
+    httpd.shutdown()

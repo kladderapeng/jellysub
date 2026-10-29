@@ -144,6 +144,8 @@ on the file and writes the corrected subtitle next to it as
 jsub local /mnt/media/movies/Movie\ (1920)/Movie.mkv --languages eng
 # candidates: sidecar .srt next to the file, or opensubtitles.com by moviehash
 # when OPENSUBTITLES_API_KEY is set
+jsub local Movie.mkv --sub downloaded.srt   # align a specific subtitle file —
+                                            # no API key / plugin needed at all
 jsub local Movie.mkv --dry-run              # preview, write nothing
 ```
 

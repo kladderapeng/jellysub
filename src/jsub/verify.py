@@ -263,8 +263,15 @@ def verify_item(
         except ProviderError as e:
             log.warning("[%s] opensubtitles API failed (%s), falling back to Jellyfin plugin search", item.name, e)
     if not subs:
-        subs = _jellyfin_plugin_candidates(client, item, cfg.language, cfg.candidates, cfg.media_root)
-        source = "jellyfin-plugin" if subs else source
+        try:
+            subs = _jellyfin_plugin_candidates(client, item, cfg.language, cfg.candidates, cfg.media_root)
+            source = "jellyfin-plugin" if subs else source
+        except JellyfinError as e:
+            log.warning("[%s] Jellyfin remote subtitle search failed: %s", item.name, e)
+            return VerifyResult(
+                item.id, item.name, "no-match", moviehash=moviehash,
+                detail=f"Jellyfin remote search unavailable ({e}); install the Open Subtitles plugin or set OPENSUBTITLES_API_KEY",
+            )
     if not subs:
         return VerifyResult(item.id, item.name, "no-match", moviehash=moviehash,
                             detail="no candidates (need OPENSUBTITLES_API_KEY or the Open Subtitles plugin in Jellyfin)")

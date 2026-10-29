@@ -70,6 +70,7 @@ def align_local_file(
     language: str = "eng",
     vcfg: VerifyConfig | None = None,
     provider: OpenSubtitles | None = None,
+    sub_path: str | None = None,
 ) -> LocalResult:
     vcfg = vcfg or VerifyConfig(language=language)
     vcfg.language = language
@@ -79,8 +80,17 @@ def align_local_file(
     runtime_s = _probe_runtime_s(media_path, vcfg)
     log.info("[%s] moviehash=%s runtime=%.0fs", os.path.basename(media_path), moviehash, runtime_s)
 
-    subs = sidecar_candidates(media_path, language)
-    source = "sidecar"
+    if sub_path:
+        if not os.path.exists(sub_path):
+            return LocalResult(media_path, "error", detail=f"no such subtitle file: {sub_path}")
+        with open(sub_path, "rb") as f:
+            subs = [(SubFile(file_id=0, file_name=os.path.basename(sub_path),
+                             language=language, format=os.path.splitext(sub_path)[1][1:]),
+                      parse_srt(decode_subtitle(f.read())))]
+        source = "explicit --sub"
+    else:
+        subs = sidecar_candidates(media_path, language)
+        source = "sidecar"
     if provider is not None and getattr(provider, "api_key", ""):
         try:
             lang2 = language[:2]
@@ -113,7 +123,9 @@ def align_local_file(
     al = best.alignment
     corrected = render_srt(transform_subtitle(best.sub, al))
     base = os.path.splitext(media_path)[0]
-    lang_tag = (best.file.language or language)[:3]
+    from .client import iso639_2_to_3
+
+    lang_tag = iso639_2_to_3(best.file.language or language)[:2] if len(best.file.language or language) <= 3 else (best.file.language or language)[:2]
     out_path = f"{base}.{lang_tag}.srt"
     log.info(
         "[%s] chose %s: speed=%.5f offset=%.2fs rms=%.3fs anchors=%d -> %s",

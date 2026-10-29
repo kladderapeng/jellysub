@@ -84,3 +84,17 @@ def test_sidecar_candidates_filters_language(media):
     eng = sidecar_candidates(str(media), "eng")
     assert all("deu" not in f.file_name for f, _ in eng)
     assert len(eng) == 1
+
+
+def test_local_with_explicit_sub_no_provider(tmp_path, monkeypatch):
+    m = tmp_path / "Bare.mkv"
+    m.write_bytes(b"\0" * 300_000)
+    sub = tmp_path / "subs" / "whatever.srt"
+    sub.parent.mkdir()
+    sub.write_text(SRT)
+    monkeypatch.setattr(local_mod, "transcribe_media", lambda *a, **k: fake_words())
+    monkeypatch.setattr(local_mod, "_probe_runtime_s", lambda *a, **k: 200.0)
+    res = align_local_file(str(m), "eng", VerifyConfig(language="eng"), provider=None, sub_path=str(sub))
+    assert res.action == "aligned"
+    assert res.chosen == "whatever.srt"
+    assert os.path.exists(str(m.with_suffix("")) + ".en.srt")

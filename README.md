@@ -27,14 +27,76 @@ Two modes:
 
 ## Setup
 
+Prefer your distro's package manager over pip where possible. `jsub` itself
+is not packaged anywhere yet, so install it from a clone with
+`pip install -e .` (API mode needs no third-party packages at all).
+
+### Debian / Ubuntu (apt)
+
 ```bash
-pip install -e .                 # API mode, stdlib only
-pip install -e '.[align]'        # + vosk + bundled ffmpeg for align mode
+sudo apt update
+sudo apt install python3 python3-venv ffmpeg python3-pytest
+# vosk is NOT in Debian's repos — use pipx (PEP 668-safe) or the project venv:
+sudo apt install pipx && pipx install vosk      # or: pip install vosk inside the venv
+
+git clone https://github.com/kladderapeng/jellysub.git && cd jellysub
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e .                 # add '.[align]' only if you didn't use apt/pipx above
 ```
 
+`ffmpeg` from apt is picked up automatically (`media.py` prefers a system
+ffmpeg over the bundled one), so the `imageio-ffmpeg` extra is optional there.
+Don't `sudo pip install` into system Python on bookworm/trixie — PEP 668
+blocks it; use `apt install python3-<module>` when it exists, else venv/pipx.
+
+### Arch Linux (pacman)
+
+```bash
+sudo pacman -Syu
+sudo pacman -S python python-vosk ffmpeg python-pytest   # all in [extra], no AUR needed
+
+git clone https://github.com/kladderapeng/jellysub.git && cd jellysub
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+```
+
+### Generic / pip-only fallback
+
+```bash
+pip install -e .                 # API mode, stdlib only
+pip install -e '.[align]'        # + vosk + bundled ffmpeg binary for align mode
+```
+
+### The `externally-managed-environment` pip error (PEP 668)
+
+On Debian 12+/Ubuntu 24.04+ (and other modern distros) system Python is
+protected; `pip install` outside a venv fails with
+`error: externally-managed-environment`. The canonical fixes, in order of
+preference — do **not** use `--break-system-packages`:
+
+1. **apt first**: `sudo apt install python3-<module>` whenever the module is
+   packaged (e.g. `python3-pytest`, `python3-requests`).
+2. **venv for the project**: `python3 -m venv .venv && . .venv/bin/activate`,
+   then `pip install -e .` inside it — this is what the examples above do.
+3. **pipx for CLI tools**: `sudo apt install pipx && pipx install vosk` —
+   pipx creates an isolated venv per tool and puts the binary on your PATH.
+4. Only if you truly know what you're doing: `pip install --break-system-packages`.
+
+### Credentials
+
 Create an API key in Jellyfin: Dashboard → Administration → API Keys.
-For align mode you also need an OpenSubtitles API key
-(`OPENSUBTITLES_API_KEY`, from https://www.opensubtitles.com/users/importlevel).
+
+**No OpenSubtitles API key is required** if the Open Subtitles plugin is
+installed in Jellyfin (the plugin itself only needs an opensubtitles.com
+account, set in the plugin's settings): `align` then obtains candidates via
+Jellyfin's own remote search (`/Items/{id}/Remote/Subtitles/Search`) and
+reads the downloaded sidecar file from the media directory. Set
+`OPENSUBTITLES_API_KEY` only if you also want direct opensubtitles.com
+queries — the moviehash lookup there finds the exact release even when the
+plugin's search doesn't. Without either, `align` reports `no-match`.
+
+Vosk ASR models (~40 MB each, per language) are data, not packages — they
+auto-download on first use into `JSUB_MODEL_DIR` (default `~/.cache/jsub/models`).
 
 ## Usage
 
@@ -104,7 +166,8 @@ either spelling.
 
 - API-mode remote search requires the Open Subtitles plugin (or another
   subtitle provider plugin) installed and configured on the server; align
-  mode talks to opensubtitles.com directly and needs no Jellyfin plugin.
+  mode uses that plugin's search when `OPENSUBTITLES_API_KEY` is unset and
+  queries opensubtitles.com directly when it is set.
 - "Fit"/"align" only re-time text formats (srt/ass/ssa/vtt); image formats
   (PGS/VobSub) are skipped.
 - The Jellyfin API always returns `204` for remote subtitle downloads, even on

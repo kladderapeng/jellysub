@@ -32,6 +32,8 @@ SRT_RIGHT = (
 
 
 class StubProvider:
+    api_key = "stub-key"
+
     def __init__(self):
         self.downloads = []
 
@@ -120,7 +122,7 @@ def test_verify_item_picks_aligned_candidate(server, monkeypatch, tmp_path):
     cfg = VerifyConfig(language="eng", candidates=2, windows=1, window_seconds=10.0)
     res = verify_item(client, item, cfg, StubProvider())
     assert res.action == "aligned"
-    assert res.chosen == "right.srt"
+    assert res.chosen.startswith("right.srt")
     assert res.anchors >= 2
     assert res.rms_s < 1.0
     assert res.corrected_srt is not None

@@ -56,6 +56,8 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["dry_run"] = True
     if args.libraries:
         cfg["libraries"] = args.libraries
+    if getattr(args, "path", None):
+        cfg["path"] = args.path
     return cfg
 
 
@@ -86,6 +88,7 @@ def build_pipeline_config(cfg: dict, args: argparse.Namespace) -> PipelineConfig
         fetch=fetch,
         fit=fit,
         library_ids=libraries,
+        path=cfg.get("path"),
         dry_run=bool(cfg.get("dry_run", False)),
         do_fetch=args.command in ("fetch", "run"),
         do_fit=args.command in ("fit", "run"),
@@ -102,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--languages", help="comma separated subtitle languages")
     parser.add_argument("--offset-ms", type=float, help="subtitle timing offset in ms")
     parser.add_argument("--libraries", help="comma separated library ids to limit scan")
+    parser.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
     parser.add_argument("--dry-run", action="store_true", help="do not modify anything")
     parser.add_argument("--verbose", "-v", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -127,19 +131,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "scan":
         pipe = build_pipeline_config(cfg, args)
-        for lib in (client.libraries() if not pipe.library_ids else [
-            {"ItemId": i, "Name": i} for i in pipe.library_ids
-        ]):
-            lib_id = lib.get("ItemId") or lib.get("Id") or ""
-            items = client.list_items(parent_id=lib_id or None)
-            missing = [
-                it for it in items
-                if it.type in ("Movie", "Episode")
-                and not any(it.has_subtitle(lang) for lang in pipe.fetch.languages)
-            ]
-            print(f"{lib.get('Name', lib_id)}: {len(missing)}/{len(items)} items missing subtitles")
-            for it in missing:
-                print(f"  - {it.type}  {it.name}  [{it.id}]")
+        from .pipeline import collect_items
+
+        items = collect_items(client, pipe)
+        missing = [
+            it for it in items
+            if it.type in ("Movie", "Episode")
+            and not any(it.has_subtitle(lang) for lang in pipe.fetch.languages)
+        ]
+        print(f"{len(missing)}/{len(items)} items missing subtitles")
+        for it in missing:
+            print(f"  - {it.type}  {it.name}  [{it.id}]  {it.path or ''}")
         return 0
 
     if args.command == "align":
@@ -155,34 +157,27 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=bool(cfg.get("dry_run", False)),
         )
         provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
-        lib_ids = None
-        if cfg.get("libraries"):
-            lib_ids = [x.strip() for x in str(cfg["libraries"]).split(",") if x.strip()]
-        libraries = (
-            [{"ItemId": i, "Name": i} for i in lib_ids]
-            if lib_ids
-            else client.libraries()
-        )
+        from .pipeline import collect_items
+
+        vpipe = build_pipeline_config(cfg, args)
         counts: dict[str, int] = {}
-        for lib in libraries:
-            lib_id = lib.get("ItemId") or lib.get("Id") or ""
-            for item in client.list_items(parent_id=lib_id or None):
-                if item.type not in ("Movie", "Episode"):
-                    continue
-                try:
-                    res = verify_item(client, item, vcfg, provider)
-                except Exception as e:
-                    log.warning("[%s] align failed: %s", item.name, e)
-                    res = type("R", (), {"action": "error", "name": item.name,
-                                          "moviehash": None, "chosen": "", "speed": 1.0,
-                                          "offset_s": 0.0, "rms_s": 0.0, "anchors": 0,
-                                          "detail": str(e), "item_id": item.id})()
-                counts[res.action] = counts.get(res.action, 0) + 1
-                log.info(
-                    "%-12s %-30s hash=%s file=%s speed=%.5f offset=%.2fs rms=%.3fs anchors=%d %s",
-                    res.action, res.name, res.moviehash, res.chosen, res.speed,
-                    res.offset_s, res.rms_s, res.anchors, res.detail,
-                )
+        for item in collect_items(client, vpipe):
+            if item.type not in ("Movie", "Episode"):
+                continue
+            try:
+                res = verify_item(client, item, vcfg, provider)
+            except Exception as e:
+                log.warning("[%s] align failed: %s", item.name, e)
+                res = type("R", (), {"action": "error", "name": item.name,
+                                      "moviehash": None, "chosen": "", "speed": 1.0,
+                                      "offset_s": 0.0, "rms_s": 0.0, "anchors": 0,
+                                      "detail": str(e), "item_id": item.id})()
+            counts[res.action] = counts.get(res.action, 0) + 1
+            log.info(
+                "%-12s %-30s hash=%s file=%s speed=%.5f offset=%.2fs rms=%.3fs anchors=%d %s",
+                res.action, res.name, res.moviehash, res.chosen, res.speed,
+                res.offset_s, res.rms_s, res.anchors, res.detail,
+            )
         print(json.dumps(counts, indent=2))
         return 0
 

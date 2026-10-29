@@ -111,6 +111,22 @@ jsub run --dry-run                          # see what would happen
 jsub fit --languages eng                    # only re-time existing subs
 ```
 
+### Selecting only part of the library
+
+`--path` limits any command to a local media directory (recursively) or a
+single file, matched against each item's `Path` — handy with Jellyfin's usual
+layout:
+
+```bash
+jsub run --path /data/movies/Movie\ (1920)                 # one movie folder
+jsub align --path /data/series/Friends/Season\ 01          # one season
+jsub scan --path /data/series/Friends/S01E01.mp4           # a single episode file
+```
+
+(The path must be the server-side path as Jellyfin sees it, since `--path`
+matches item `Path` values; when running on the server itself they are the
+same.)
+
 ### align mode (on the server)
 
 ```bash

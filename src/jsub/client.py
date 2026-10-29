@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -222,6 +223,40 @@ class JellyfinClient:
             if not batch or start >= total:
                 break
         return items
+
+    def find_items_by_path(self, path: str, recursive: bool = True) -> list[Item]:
+        """Find items whose media file lives at or under the given local path.
+
+        Matches against the item Path field, so it works for both a single
+        file (/data/series/Friends/Season 01/S01E01.mp4) and a directory
+        (/data/movies/Movie (1920), matched recursively).
+        """
+        target = os.path.normpath(path).rstrip(os.sep)
+        params = {
+            "Recursive": "true" if recursive else "false",
+            "IncludeItemTypes": ",".join(MEDIA_TYPES),
+            "Fields": "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds",
+            "Limit": 500,
+        }
+        items: list[Item] = []
+        start = 0
+        while True:
+            data = self._get_json("/Items", params={**params, "StartIndex": start}) or {}
+            batch = [Item.from_dict(d) for d in data.get("Items", [])]
+            items.extend(batch)
+            total = int(data.get("TotalRecordCount", len(items)))
+            start += len(batch)
+            if not batch or start >= total:
+                break
+        out = []
+        for it in items:
+            p = it.path
+            if not p:
+                continue
+            p = os.path.normpath(p).rstrip(os.sep)
+            if p == target or (recursive and p.startswith(target + os.sep)):
+                out.append(it)
+        return out
 
     def get_item(self, item_id: str) -> Item:
         data = self._get_json(

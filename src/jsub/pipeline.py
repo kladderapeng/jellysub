@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 from .client import Item, JellyfinClient, JellyfinError
@@ -23,29 +24,41 @@ class PipelineConfig:
     fetch: FetchConfig
     fit: FitConfig
     library_ids: list[str] | None = None
+    path: str | None = None
     dry_run: bool = False
     do_fetch: bool = True
     do_fit: bool = True
 
 
-def run_pipeline(client: JellyfinClient, cfg: PipelineConfig) -> list[ItemResult]:
-    results: list[ItemResult] = []
+def collect_items(client: JellyfinClient, cfg: PipelineConfig) -> list[Item]:
+    """Items to process: by local path (file or directory), else by libraries."""
+    if cfg.path:
+        recursive = os.path.isdir(cfg.path) or not os.path.isfile(cfg.path)
+        items = client.find_items_by_path(cfg.path, recursive=recursive)
+        log.info("path %s -> %d items", cfg.path, len(items))
+        return items
     if cfg.library_ids:
-        libraries = [
-            {"ItemId": lid, "Name": lid} for lid in cfg.library_ids
-        ]
+        libraries = [{"ItemId": lid, "Name": lid} for lid in cfg.library_ids]
     else:
         libraries = client.libraries()
+    items: list[Item] = []
     for lib in libraries:
         lib_id = lib.get("ItemId") or lib.get("Id") or ""
         lib_name = lib.get("Name", lib_id)
         log.info("scanning library %s (%s)", lib_name, lib_id)
         try:
-            items = client.list_items(parent_id=lib_id or None)
+            items.extend(client.list_items(parent_id=lib_id or None))
         except JellyfinError as e:
             log.warning("library %s scan failed: %s", lib_name, e)
+    return items
+
+
+def run_pipeline(client: JellyfinClient, cfg: PipelineConfig) -> list[ItemResult]:
+    results: list[ItemResult] = []
+    for item in collect_items(client, cfg):
+        if item.type not in ("Movie", "Episode"):
             continue
-        for item in items:
+        if True:
             if item.type not in ("Movie", "Episode"):
                 continue
             if cfg.do_fetch:

@@ -172,6 +172,8 @@ def test_legacy_remotesubtitles_route_fallback(monkeypatch, tmp_path):
             self.wfile.write(b)
         def do_GET(self):
             p = _up(self.path).path
+            if p == f"/Items/{ITEM_ID}/RemoteSearch/Subtitles/eng":
+                return self._j([{"Id": "legacy1", "Name": "Movie.en.srt", "Language": "eng", "Format": "srt", "Score": 90}])
             if p == f"/Items/{ITEM_ID}/RemoteSearch/Subtitles":
                 return self._j([{"Id": "legacy1", "Name": "Movie.en.srt", "Language": "eng", "Format": "srt", "Score": 90}])
             if p.endswith("/Remote/Subtitles/Search"):

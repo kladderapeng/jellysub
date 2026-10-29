@@ -186,3 +186,27 @@ def test_resolve_media_path(tmp_path):
     assert resolve_media_path(str(local)) == str(local)
     # unreachable
     assert resolve_media_path("/nope/nothing.mkv", media_root=str(tmp_path)) is None
+
+
+def test_search_remote_subtitles_language_path_route():
+    """GET /Items/{id}/RemoteSearch/Subtitles/{lang} is the web-UI route."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading, json as _json
+    from urllib.parse import urlparse as _up
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            p = _up(self.path).path
+            if p == "/Items/abc/RemoteSearch/Subtitles/eng":
+                b = _json.dumps([{"Id": "x1", "Language": "eng", "Format": "srt"}]).encode()
+                self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+                return
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    c = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    res = c.search_remote_subtitles("abc", "eng")
+    assert res and res[0].id == "x1"
+    httpd.shutdown()

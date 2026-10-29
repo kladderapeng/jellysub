@@ -321,15 +321,16 @@ class JellyfinClient:
     def search_remote_subtitles(
         self, item_id: str, language: str | None = None
     ) -> list[RemoteSubtitle]:
-        params = {"Language": language} if language else None
+        lang = (language or "eng")
         routes = [
+            f"/Items/{item_id}/RemoteSearch/Subtitles/{lang}",
             f"/Items/{item_id}/Remote/Subtitles/Search",
             f"/Items/{item_id}/RemoteSearch/Subtitles",
         ]
         last_err: JellyfinError | None = None
         for route in routes:
             try:
-                data = self._get_json(route, params=params)
+                data = self._get_json(route, params={"Language": lang})
                 return [RemoteSubtitle.from_dict(d) for d in (data or [])]
             except JellyfinError as e:
                 last_err = e

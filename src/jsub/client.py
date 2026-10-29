@@ -190,8 +190,10 @@ class JellyfinClient:
     def server_info(self) -> dict:
         return self._get_json("/System/Info/Public")
 
-    def libraries(self) -> list[dict]:
+    def libraries(self, media_only: bool = True) -> list[dict]:
         folders = self._get_json("/Library/VirtualFolders") or []
+        if not media_only:
+            return folders
         return [
             f
             for f in folders
@@ -227,29 +229,68 @@ class JellyfinClient:
     def find_items_by_path(self, path: str, recursive: bool = True) -> list[Item]:
         """Find items whose media file lives at or under the given local path.
 
-        Matches against the item Path field, so it works for both a single
-        file (/data/series/Friends/Season 01/S01E01.mp4) and a directory
-        (/data/movies/Movie (1920), matched recursively). Iterates the
-        libraries with parentId, because a global /Items query without
-        parentId returns nothing on many server versions.
+        Matches against the item Path field: exact for a file, path-boundary
+        prefix for a directory. Iterates ALL virtual folders with parentId
+        (a global /Items without parentId returns nothing on many server
+        versions, and collection-type filtering can hide the library). If no
+        prefix match is found, falls back to matching on the path's trailing
+        components, so a differently-mounted prefix still works.
         """
+        import logging
+
+        log = logging.getLogger("jsub.client")
         target = os.path.normpath(path).rstrip(os.sep)
+        target_parts = [p for p in target.split(os.sep) if p]
         items: list[Item] = []
-        for lib in self.libraries():
+        for lib in self.libraries(media_only=False):
             lib_id = lib.get("ItemId") or lib.get("Id") or ""
+            lib_name = lib.get("Name", lib_id)
             try:
-                items.extend(self.list_items(parent_id=lib_id or None))
-            except JellyfinError:
+                batch = self.list_items(parent_id=lib_id or None)
+            except JellyfinError as e:
+                log.warning("library %s scan failed: %s", lib_name, e)
                 continue
-        out = []
+            with_path = sum(1 for i in batch if i.path)
+            log.info("library %s: %d items, %d with Path", lib_name, len(batch), with_path)
+            items.extend(batch)
+        log.info("path lookup %s: %d candidate items with Path", target, sum(1 for i in items if i.path))
+
+        def norm(p: str) -> str:
+            return os.path.normpath(p).rstrip(os.sep)
+
+        prefix_hits = [
+            it for it in items
+            if it.path and (
+                norm(it.path) == target
+                or (recursive and norm(it.path).startswith(target + os.sep))
+            )
+        ]
+        if prefix_hits:
+            return prefix_hits
+        # fallback: the item path must CONTAIN the target's components as a
+        # contiguous run, ignoring the first component of the target (the
+        # mount-point name often differs: /mnt vs /srv vs /data)
+        n = len(target_parts)
+        suffix_hits = []
         for it in items:
-            p = it.path
-            if not p:
+            if not it.path:
                 continue
-            p = os.path.normpath(p).rstrip(os.sep)
-            if p == target or (recursive and p.startswith(target + os.sep)):
-                out.append(it)
-        return out
+            parts = [p for p in norm(it.path).split(os.sep) if p]
+            for skip in (0, 1):
+                needle = target_parts[skip:]
+                m = len(needle)
+                if m == 0:
+                    continue
+                for start in range(0, len(parts) - m + 1):
+                    if parts[start : start + m] == needle:
+                        suffix_hits.append(it)
+                        break
+                else:
+                    continue
+                break
+        if suffix_hits:
+            log.info("path lookup %s: matched %d items by suffix", target, len(suffix_hits))
+        return suffix_hits
 
     def get_item(self, item_id: str) -> Item:
         data = self._get_json(

@@ -322,14 +322,38 @@ class JellyfinClient:
         self, item_id: str, language: str | None = None
     ) -> list[RemoteSubtitle]:
         params = {"Language": language} if language else None
-        data = self._get_json(f"/Items/{item_id}/Remote/Subtitles/Search", params=params)
-        return [RemoteSubtitle.from_dict(d) for d in (data or [])]
+        routes = [
+            f"/Items/{item_id}/Remote/Subtitles/Search",
+            f"/Items/{item_id}/RemoteSearch/Subtitles",
+        ]
+        last_err: JellyfinError | None = None
+        for route in routes:
+            try:
+                data = self._get_json(route, params=params)
+                return [RemoteSubtitle.from_dict(d) for d in (data or [])]
+            except JellyfinError as e:
+                last_err = e
+                if e.status not in (404, 405):
+                    raise
+        raise last_err if last_err else JellyfinError("remote subtitle search failed")
 
     def download_remote_subtitle(self, item_id: str, subtitle_id: str) -> bool:
-        status, _ = self._request(
-            "POST", f"/Items/{item_id}/Remote/Subtitles/{subtitle_id}"
-        )
-        return status in (200, 204)
+        routes = [
+            f"/Items/{item_id}/Remote/Subtitles/{subtitle_id}",
+            f"/Items/{item_id}/RemoteSearch/Subtitles/{subtitle_id}",
+        ]
+        last_err: JellyfinError | None = None
+        for route in routes:
+            try:
+                status, _ = self._request("POST", route)
+                return status in (200, 204)
+            except JellyfinError as e:
+                last_err = e
+                if e.status not in (404, 405):
+                    raise
+        if last_err:
+            raise last_err
+        return False
 
     def download_subtitle_stream(
         self, item_id: str, media_source_id: str, index: int, format: str = "srt"

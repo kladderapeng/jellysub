@@ -178,9 +178,9 @@ def _jellyfin_plugin_candidates(
         if not ok:
             log.warning("download %s returned non-2xx", cand.id)
             continue
-        text = _read_sidecar_for(client, item, language, media_root)
+        text = _read_via_api(client, item, language) or _read_sidecar_for(client, item, language, media_root)
         if text is None:
-            log.warning("downloaded %s but no sidecar appeared next to %s", cand.id, item.path)
+            log.warning("downloaded %s but no subtitle stream appeared (check the Jellyfin server log — the 204 is returned even on failure)", cand.id)
             continue
         subs.append(
             (
@@ -196,6 +196,40 @@ def _jellyfin_plugin_candidates(
             )
         )
     return subs
+
+
+def _read_via_api(client: JellyfinClient, item: Item, language: str) -> str | None:
+    """Fetch the newest external subtitle stream through the Jellyfin API.
+
+    Works even when the downloaded file hasn't hit the metadata yet, and does
+    not depend on the on-disk naming convention.
+    """
+    from .client import language_aliases
+
+    want = {a.lower() for a in language_aliases(language)}
+    try:
+        fresh = client.get_item(item.id)
+    except JellyfinError as e:
+        log.warning("[%s] re-read item failed: %s", item.name, e)
+        return None
+    if not fresh.media_source_id:
+        return None
+    subs = [s for s in fresh.subtitle_streams() if s.is_external]
+    if not subs:
+        return None
+    target = None
+    for s in reversed(subs):
+        if not s.language or s.language.lower() in want:
+            target = s
+            break
+    if target is None:
+        target = subs[-1]
+    try:
+        raw = client.download_subtitle_stream(fresh.id, fresh.media_source_id, target.index, "srt")
+    except JellyfinError as e:
+        log.warning("[%s] stream download failed: %s", item.name, e)
+        return None
+    return decode_subtitle(raw)
 
 
 def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_root: str | None = None) -> str | None:

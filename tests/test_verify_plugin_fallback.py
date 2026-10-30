@@ -275,3 +275,48 @@ def test_plugin_candidates_with_missing_language_accepted(server, monkeypatch, t
     assert res.action == "aligned", res.detail
     assert "jellyfin-plugin" in res.chosen
     httpd.shutdown()
+
+
+def test_plugin_readback_via_api_stream(server, monkeypatch, tmp_path):
+    """Downloaded sub is read via /Videos/.../Stream.srt, not from disk."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading, json as _json
+    from urllib.parse import urlparse as _up
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _j(self, obj, status=200):
+            b = _json.dumps(obj).encode()
+            self.send_response(status); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+        def do_GET(self):
+            p = _up(self.path).path
+            if p.startswith(f"/Items/{ITEM_ID}/RemoteSearch/Subtitles"):
+                return self._j([{"Id": "s1", "Name": "x.srt", "Format": "srt", "Language": "en", "Score": 90}])
+            if p == f"/Items/{ITEM_ID}":
+                return self._j({"Id": ITEM_ID, "Name": "Movie", "Type": "Episode", "Path": "/nonexistent/Movie.mkv",
+                                "RunTimeTicks": 200 * 10_000_000, "ProviderIds": {},
+                                "MediaSources": [{"Id": "src1"}],
+                                "MediaStreams": [{"Index": 3, "Type": "Subtitle", "Language": "eng", "Codec": "srt", "IsExternal": True}]})
+            if p.endswith("/Stream.srt"):
+                b = SRT_RIGHT.encode()
+                self.send_response(200); self.send_header("Content-Type", "text/plain"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+                return
+            return self._j({}, 404)
+        def do_POST(self):
+            p = _up(self.path).path
+            length = int(self.headers.get("Content-Length", 0))
+            if length: self.rfile.read(length)
+            if "RemoteSearch/Subtitles/s1" in p or p == f"/Videos/{ITEM_ID}/Subtitles" or p == f"/Items/{ITEM_ID}/Refresh":
+                self.send_response(204); self.send_header("Content-Length", "0"); self.end_headers(); return
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers()
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    media = tmp_path / "Movie.mkv"; media.write_bytes(b"\0" * 300_000)
+    item = Item(id=ITEM_ID, name="Movie", type="Episode", path=str(media),
+                runtime_ticks=200 * 10_000_000, provider_ids={}, media_source_id="src1")
+    client = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    monkeypatch.setattr(verify_mod, "transcribe_media", lambda *a, **k: fake_words())
+    res = verify_item(client, item, VerifyConfig(language="eng"), provider=None)
+    assert res.action == "aligned", res.detail
+    httpd.shutdown()

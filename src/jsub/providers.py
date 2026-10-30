@@ -62,18 +62,22 @@ class OpenSubtitles:
         user = os.environ.get("OPENSUBTITLES_USERNAME")
         pw = os.environ.get("OPENSUBTITLES_PASSWORD")
         if user and pw:
+            import logging as _l
+
+            _log = _l.getLogger("jsub.providers")
             try:
                 data = self._request(
                     "POST", "/login",
                     json_body={"username": user, "password": pw},
                 )
                 self._token = data.get("token")
-                log_token = "ok"
+                _log.info("opensubtitles login ok (user=%s)", user)
             except ProviderError as e:
-                raise ProviderError(f"opensubtitles login failed: {e}") from e
-            import logging as _l
-
-            _l.getLogger("jsub.providers").info("opensubtitles login %s", log_token)
+                _log.warning(
+                    "opensubtitles login failed for user=%r (%s); "
+                    "continuing without download token (search still works, "
+                    "/download will be rejected)", user, e,
+                )
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  json_body: dict | None = None, raw: bool = False):

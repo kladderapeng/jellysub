@@ -107,6 +107,31 @@ def _fix_dogpile_cache():
         pass
 
 
+def _series_variants(v) -> list[str]:
+    """Title variants to try: series name, with year, and parsed-from-path forms."""
+    import re as _re
+
+    names = []
+    series = getattr(v, "series", None) or getattr(v, "title", None)
+    if series:
+        names.append(series)
+        year = getattr(v, "year", None)
+        if year:
+            names.append(f"{series} {year}")
+    import os as _os
+
+    name = _os.path.splitext(_os.path.basename(getattr(v, "name", "") or ""))[0]
+    m = _re.search(r"^(.*?)\s+[sS]\d{1,2}[eE]\d{1,3}", name)
+    if m and m.group(1) not in names:
+        names.append(m.group(1).strip())
+    seen, out = set(), []
+    for n in names:
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def _query_provider(pname: str, video_path: str, languages: list[str]):
     """Query one subliminal provider; each provider has its own query signature."""
     from subliminal.subtitle import Language
@@ -166,10 +191,20 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
     if pname in ("subtitulamos",):
         p = cls(**kwargs)
         p.initialize()
-        if is_episode:
-            return p.query(series=getattr(v, "series", None) or getattr(v, "title", None),
-                           season=v.season, episode=getattr(v, "episode", None), languages=langs)
-        return p.query(languages=langs)
+        if not is_episode:
+            return p.query(languages=langs)
+        found = []
+        for series in _series_variants(v):
+            try:
+                found = p.query(series=series, season=v.season,
+                                episode=getattr(v, "episode", None), languages=langs)
+            except Exception as e:
+                log.info("subtitulamos series=%r failed: %s", series, e)
+                continue
+            if found:
+                log.info("subtitulamos matched series=%r -> %d subs", series, len(found))
+                break
+        return found
     if pname == "subtis":
         from subliminal.video import Movie
 

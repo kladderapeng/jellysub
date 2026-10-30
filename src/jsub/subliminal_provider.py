@@ -84,11 +84,21 @@ def _provider_credentials(pname: str) -> dict:
             kw["username"], kw["password"] = u, p
         else:
             log.info("opensubtitlescom: no OPENSUBTITLES_USERNAME/PASSWORD -> query works, download will fail (login-gated)")
-        key = os.environ.get("OPENSUBTITLESCOM_API_KEY") or os.environ.get("OPENSUBTITLES_API_KEY")
+        key = (
+            os.environ.get("OPENSUBTITLESCOM_API_KEY")
+            or os.environ.get("OPENSUBTITLES_API_KEY")
+        )
+        if not key:
+            # public app key shipped with subliminal (search-only); downloads
+            # use the /login Bearer token from username/password above
+            try:
+                from subliminal.providers.opensubtitlescom import OPENSUBTITLESCOM_API_KEY as _k
+
+                key = _k
+            except Exception:
+                key = None
         if key:
             kw["apikey"] = key
-        else:
-            log.info("opensubtitlescom: no OPENSUBTITLES_API_KEY/OPENSUBTITLESCOM_API_KEY set")
         return kw
     if pname in ("opensubtitles", "opensubtitlesvip"):
         kw: dict = {}
@@ -372,7 +382,22 @@ def subliminal_download(candidate: SubCandidate, video_path: str) -> bytes:
     if provider is None:
         provider = cls(**kwargs)
         _init_provider(provider, pname)
-    provider.download_subtitle(sub)
+        if pname in ("opensubtitlescom", "opensubtitlescomvip") and kwargs.get("username"):
+            try:
+                provider.login()
+            except Exception as e:
+                log.warning("opensubtitlescom login failed during download: %s", e)
+    try:
+        provider.download_subtitle(sub)
+    except Exception as e:
+        if "429" in str(e) or "Too Many" in str(e):
+            import time
+
+            log.warning("download rate-limited (%s); waiting 30s and retrying once", e)
+            time.sleep(30)
+            provider.download_subtitle(sub)
+        else:
+            raise
     if not getattr(sub, "content", None):
         raise RuntimeError("download returned empty content")
     return sub.content

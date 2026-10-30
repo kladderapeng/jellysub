@@ -147,6 +147,7 @@ def _jellyfin_plugin_candidates(
         try:
             found = client.search_remote_subtitles(item.id, lang)
             log.info("plugin search lang=%s -> %d raw candidates", lang, len(found))
+            log.debug("raw candidates lang=%s: %s", lang, found)
             cands.extend(found)
         except JellyfinError as e:
             log.warning("remote search for %s failed: %s", lang, e)
@@ -170,16 +171,19 @@ def _jellyfin_plugin_candidates(
     )
     subs: list[tuple[SubFile, Subtitle]] = []
     for cand in cands[:limit]:
+        log.debug("candidate: id=%s name=%s lang=%s format=%s score=%s downloads=%s",
+                  cand.id, cand.name, cand.language, cand.format, cand.score, cand.download_count)
         try:
             ok = client.download_remote_subtitle(item.id, cand.id)
+            log.info("download POST %s -> %s", cand.id, "ok" if ok else "non-2xx")
         except JellyfinError as e:
             log.warning("download %s failed: %s", cand.id, e)
             continue
         if not ok:
-            log.warning("download %s returned non-2xx", cand.id)
             continue
         try:
             client.refresh_item(item.id)
+            log.debug("refresh after download ok")
         except JellyfinError as e:
             log.info("refresh after download failed (continuing): %s", e)
         text = _read_via_api(client, item, language) or _read_sidecar_for(client, item, language, media_root)
@@ -220,6 +224,8 @@ def _read_via_api(client: JellyfinClient, item: Item, language: str) -> str | No
     except JellyfinError as e:
         log.warning("[%s] re-read item failed: %s", item.name, e)
         return None
+    log.debug("[%s] re-read item raw streams: %s", item.name,
+              [(s.index, s.type, s.language, s.codec, s.is_external) for s in fresh.media_streams])
     if not fresh.media_source_id:
         return None
     subs = [s for s in fresh.subtitle_streams() if s.is_external]
@@ -263,10 +269,12 @@ def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_r
         directory = os.path.dirname(directory) or directory
     import logging as _logging
 
-    _logging.getLogger("jsub.verify").info(
+    _log = _logging.getLogger("jsub.verify")
+    _log.info(
         "sidecar scan dir=%s base=%s want=%s files=%s", directory, base, sorted(want),
         [n for n in entries if os.path.splitext(n)[1].lower() in (".srt", ".ass", ".ssa", ".vtt")],
     )
+    _log.debug("sidecar scan dir=%s ALL entries: %s", directory, sorted(entries))
     exact: tuple[float, str] | None = None
     any_lang: tuple[float, str] | None = None
     for name in entries:

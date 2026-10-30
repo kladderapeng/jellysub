@@ -427,6 +427,8 @@ class JellyfinClient:
         is_forced: bool = False,
         is_hearing_impaired: bool = False,
     ) -> None:
+        """Upload an external subtitle. On 12.x the JSON body route 500s for
+        some setups; fall back to multipart form upload (what jellyfin-web uses)."""
         body = {
             "Data": base64.b64encode(data).decode("ascii"),
             "Format": format,
@@ -434,7 +436,28 @@ class JellyfinClient:
             "IsForced": is_forced,
             "IsHearingImpaired": is_hearing_impaired,
         }
-        self._request("POST", f"/Videos/{item_id}/Subtitles", json_body=body)
+        try:
+            self._request("POST", f"/Videos/{item_id}/Subtitles", json_body=body)
+            return
+        except JellyfinError as e:
+            if e.status != 500:
+                raise
+        boundary = "jsub" + base64.b16encode(os.urandom(8)).decode()
+        parts = []
+        for k, v in (("Format", format), ("Language", language),
+                     ("IsForced", "true" if is_forced else "false"),
+                     ("IsHearingImpaired", "true" if is_hearing_impaired else "false")):
+            parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"Data\"; filename=\"sub.srt\"\r\n"
+            f"Content-Type: text/plain\r\n\r\n".encode() + data + b"\r\n"
+        )
+        parts.append(f"--{boundary}--\r\n".encode())
+        self._request(
+            "POST", f"/Videos/{item_id}/Subtitles",
+            raw_body=b"".join(parts),
+            content_type=f"multipart/form-data; boundary={boundary}",
+        )
 
     def refresh_item(self, item_id: str) -> None:
         self._request(

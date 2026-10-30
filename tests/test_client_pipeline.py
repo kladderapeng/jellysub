@@ -207,3 +207,32 @@ def test_dry_run_changes_nothing(server):
     assert any(r.action == "would-fetch" for r in results)
     assert not STATE.uploads
     assert not STATE.downloads
+
+
+def test_upload_subtitle_falls_back_to_multipart_on_500():
+    """JSON body 500 -> multipart form upload succeeds."""
+    import json as _json
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    from urllib.parse import urlparse as _up
+
+    got = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length)
+            ct = self.headers.get("Content-Type", "")
+            if "application/json" in ct:
+                self.send_response(500); self.send_header("Content-Length", "0"); self.end_headers(); return
+            assert "multipart/form-data" in ct, ct
+            got.append(body)
+            self.send_response(204); self.send_header("Content-Length", "0"); self.end_headers()
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    c = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    c.upload_subtitle("abc", b"1\n00:00:01,000 --> 00:00:02,000\nhi\n", language="eng")
+    assert got and b"multipart" not in got[0] and b"hi" in got[0]
+    httpd.shutdown()

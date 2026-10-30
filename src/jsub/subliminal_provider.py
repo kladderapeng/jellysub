@@ -76,7 +76,17 @@ def _init_provider(provider, pname: str):
 
 
 def _provider_credentials(pname: str) -> dict:
-    if pname in ("opensubtitlescom", "opensubtitlescomvip", "opensubtitles", "opensubtitlesvip"):
+    if pname in ("opensubtitlescom", "opensubtitlescomvip"):
+        kw: dict = {}
+        u = os.environ.get("OPENSUBTITLES_USERNAME")
+        p = os.environ.get("OPENSUBTITLES_PASSWORD")
+        if u and p:
+            kw["username"], kw["password"] = u, p
+        key = os.environ.get("OPENSUBTITLESCOM_API_KEY") or os.environ.get("OPENSUBTITLES_API_KEY")
+        if key:
+            kw["apikey"] = key
+        return kw
+    if pname in ("opensubtitles", "opensubtitlesvip"):
         kw: dict = {}
         u = os.environ.get("OPENSUBTITLES_USERNAME")
         p = os.environ.get("OPENSUBTITLES_PASSWORD")

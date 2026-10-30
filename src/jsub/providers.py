@@ -50,6 +50,18 @@ class OpenSubtitles:
     def __init__(self, api_key: str | None = None, timeout: float = 30.0):
         self.api_key = api_key or os.environ.get("OPENSUBTITLES_API_KEY", "")
         self.timeout = timeout
+        self._token: str | None = None
+        user = os.environ.get("OPENSUBTITLES_USERNAME")
+        pw = os.environ.get("OPENSUBTITLES_PASSWORD")
+        if user and pw and self.api_key:
+            try:
+                data = self._request(
+                    "POST", "/login",
+                    json_body={"username": user, "password": pw},
+                )
+                self._token = data.get("token")
+            except ProviderError as e:
+                raise ProviderError(f"opensubtitles login failed: {e}") from e
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  json_body: dict | None = None, raw: bool = False):
@@ -62,6 +74,8 @@ class OpenSubtitles:
                 url += "?" + urllib.parse.urlencode(clean, doseq=True)
         headers = {"Api-Key": self.api_key, "User-Agent": USER_AGENT,
                    "Accept": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         data = None
         if json_body is not None:
             data = json.dumps(json_body).encode()

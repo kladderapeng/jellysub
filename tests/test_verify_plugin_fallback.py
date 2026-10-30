@@ -356,3 +356,34 @@ def test_get_item_with_user_id(monkeypatch, tmp_path):
     assert item.id == ITEM_ID
     assert seen == [["user-1"]]
     httpd.shutdown()
+
+
+def test_get_item_users_route_fallback(tmp_path):
+    """12.x: /Items/{id}?UserId 400s but /Users/{uid}/Items/{id} works."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading, json as _json
+    from urllib.parse import urlparse as _up, parse_qs as _pq
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _j(self, obj, status=200):
+            b = _json.dumps(obj).encode()
+            self.send_response(status); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+        def do_GET(self):
+            u = _up(self.path)
+            if u.path == "/Users/Me":
+                return self._j({"Id": "user-1"})
+            if u.path == f"/Items/{ITEM_ID}":
+                return self._j({"error": "Error processing request"}, 400)
+            if u.path == f"/Users/user-1/Items/{ITEM_ID}":
+                return self._j({"Id": ITEM_ID, "Name": "Movie", "Type": "Movie", "Path": "/x.mkv",
+                                "RunTimeTicks": 100, "MediaSources": [{"Id": "s"}],
+                                "MediaStreams": [{"Index": 0, "Type": "Video"}]})
+            return self._j({}, 404)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    c = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    item = c.get_item(ITEM_ID, user_id=c.current_user_id())
+    assert item.id == ITEM_ID and item.media_source_id == "s"
+    httpd.shutdown()

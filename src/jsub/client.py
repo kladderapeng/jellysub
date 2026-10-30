@@ -321,11 +321,25 @@ class JellyfinClient:
         return []
 
     def get_item(self, item_id: str, user_id: str | None = None) -> Item:
-        params = {"Fields": "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds"}
-        if user_id:
-            params["UserId"] = user_id
-        data = self._get_json(f"/Items/{item_id}", params=params)
-        return Item.from_dict(data or {})
+        fields = "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds"
+        routes = [
+            (f"/Users/{user_id}/Items/{item_id}", {"Fields": fields}) if user_id else None,
+            (f"/Items/{item_id}", {"Fields": fields, "UserId": user_id} if user_id else {"Fields": fields}),
+            (f"/Items/{item_id}", {"Fields": fields}),
+        ]
+        last_err: JellyfinError | None = None
+        for entry in routes:
+            if entry is None:
+                continue
+            route, params = entry
+            try:
+                data = self._get_json(route, params=params)
+                return Item.from_dict(data or {})
+            except JellyfinError as e:
+                last_err = e
+                if e.status not in (400, 404):
+                    raise
+        raise last_err if last_err else JellyfinError(f"GET item {item_id} failed")
 
     def current_user_id(self) -> str | None:
         try:

@@ -178,6 +178,10 @@ def _jellyfin_plugin_candidates(
         if not ok:
             log.warning("download %s returned non-2xx", cand.id)
             continue
+        try:
+            client.refresh_item(item.id)
+        except JellyfinError as e:
+            log.info("refresh after download failed (continuing): %s", e)
         text = _read_via_api(client, item, language) or _read_sidecar_for(client, item, language, media_root)
         if text is None:
             log.warning("downloaded %s but no subtitle stream appeared (check the Jellyfin server log — the 204 is returned even on failure)", cand.id)
@@ -219,6 +223,8 @@ def _read_via_api(client: JellyfinClient, item: Item, language: str) -> str | No
     if not fresh.media_source_id:
         return None
     subs = [s for s in fresh.subtitle_streams() if s.is_external]
+    log.info("[%s] after download: %d subtitle streams (%d external)", item.name,
+             len(fresh.subtitle_streams()), len(subs))
     if not subs:
         return None
     target = None
@@ -250,6 +256,11 @@ def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_r
         entries = os.listdir(directory)
     except OSError:
         return None
+    if not any(os.path.splitext(n)[1].lower() in (".srt", ".ass", ".ssa", ".vtt") for n in entries):
+        for root, _dirs, files in os.walk(os.path.dirname(directory) or directory):
+            entries.extend(os.path.join(root, f) for f in files)
+        entries = [os.path.basename(e) if os.path.isabs(e) else e for e in entries]
+        directory = os.path.dirname(directory) or directory
     import logging as _logging
 
     _logging.getLogger("jsub.verify").info(

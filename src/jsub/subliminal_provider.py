@@ -33,11 +33,39 @@ class SubCandidate:
     score: float = 0.0
 
 
-def _video(path: str):
+def _video(path: str, hinted_name: str | None = None):
+    """Build the subliminal Video; optionally override the name guessit sees
+    with a hinted name (e.g. 'Movie (1920).mkv' from the parent dir), via a
+    symlink in a temp dir so the real file is untouched."""
     from guessit import guessit
     from subliminal.video import Video
 
-    return Video.fromguess(path, guessit(path))
+    target = path
+    if hinted_name and hinted_name != os.path.basename(path):
+        import tempfile
+
+        d = tempfile.mkdtemp(prefix="jsub-hint-")
+        link = os.path.join(d, hinted_name)
+        try:
+            os.symlink(os.path.abspath(path), link)
+            target = link
+        except OSError:
+            pass
+    return Video.fromguess(target, guessit(target))
+
+
+def name_hint_for(path: str) -> str | None:
+    """'Movie (1920).mkv' from a parent dir like 'Movie (1920)' when the
+    filename lacks the year (mirrors subfetch.sh --no-name-hint logic)."""
+    import re as _re
+
+    parent = os.path.basename(os.path.dirname(path))
+    m = _re.search(r"\(([0-9]{4})\)\s*$", parent)
+    if m:
+        name = os.path.basename(path)
+        if m.group(1) not in name:
+            return f"{parent}{os.path.splitext(name)[1]}"
+    return None
 
 
 def _langs(languages: list[str]):
@@ -163,7 +191,7 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
     cls = _provider_class(pname)
     if cls is None:
         return []
-    v = _video(video_path)
+    v = _video(video_path, name_hint_for(video_path))
     langs = set(_langs(languages))
     from subliminal.video import Episode as _Episode
     is_episode = isinstance(v, _Episode) or getattr(v, "season", None) is not None
@@ -303,6 +331,10 @@ def subliminal_candidates(
     providers: list[str] | None = None,
     limit: int = 10,
 ) -> list[SubCandidate]:
+    if providers is None:
+        env_p = os.environ.get("JSUB_PROVIDERS")
+        if env_p:
+            providers = [x.strip() for x in env_p.split(",") if x.strip()]
     """Search subliminal providers for subtitles matching the video file."""
     try:
         import subliminal  # noqa: F401
@@ -349,7 +381,7 @@ def subliminal_download(candidate: SubCandidate, video_path: str) -> bytes:
     cls = _provider_class(candidate.provider)
     if cls is None:
         raise RuntimeError(f"unknown provider {candidate.provider}")
-    v = _video(video_path)
+    v = _video(video_path, name_hint_for(video_path))
     langs = set(_langs([candidate.language]))
     kwargs = _provider_credentials(candidate.provider)
     pname = candidate.provider

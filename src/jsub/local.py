@@ -121,7 +121,7 @@ def align_local_file(
         try:
             from .subliminal_provider import subliminal_candidates, subliminal_download
 
-            cands = subliminal_candidates(media_path, [language], limit=vcfg.candidates)
+            cands = subliminal_candidates(media_path, [language], limit=vcfg.candidates, providers=vcfg.providers)
             log.info("[%s] subliminal -> %d candidates", os.path.basename(media_path), len(cands))
             for c in cands:
                 try:

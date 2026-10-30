@@ -238,3 +238,33 @@ def test_config_tolerates_invalid_escape_and_comments(tmp_path, monkeypatch):
     out = m.load_config(args)
     assert out["url"] == "http://x"
     assert out["os_password"] == "C:\new\\pw"
+
+
+def test_name_hint_from_parent_dir_year(tmp_path):
+    from jsub.subliminal_provider import name_hint_for
+
+    d = tmp_path / "Movie (1920)"
+    d.mkdir()
+    f = d / "movie.mkv"
+    f.touch()
+    assert name_hint_for(str(f)) == "Movie (1920).mkv"
+    f2 = d / "Movie (1920).mkv"
+    f2.touch()
+    assert name_hint_for(str(f2)) is None
+    # series: no hint
+    s = tmp_path / "series" / "Mum" / "Season 01" / "Mum S01E01.mp4"
+    s.parent.mkdir(parents=True)
+    s.touch()
+    assert name_hint_for(str(s)) is None
+
+
+def test_providers_flag_threads_to_subliminal(tmp_path, monkeypatch):
+    import jsub.__main__ as m
+    import jsub.subliminal_provider as sp
+
+    seen = {}
+    monkeypatch.setattr(sp, "subliminal_candidates",
+                        lambda path, langs, limit=10, providers=None: seen.setdefault("providers", providers) or [])
+    args = m.build_parser().parse_args(["--providers", "podnapisi,subtitulamos", "local", str(tmp_path / "x.mkv")])
+    cfg = m.load_config(args)
+    assert cfg["providers"] == ["podnapisi", "subtitulamos"]

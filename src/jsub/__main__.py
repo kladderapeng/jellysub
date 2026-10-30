@@ -93,6 +93,7 @@ def load_config(args: argparse.Namespace) -> dict:
         "ffmpeg": "FFMPEG_PATH",
         "media_root": "JSUB_MEDIA_ROOT",
         "user_id": "JSUB_USER_ID",
+        "providers": "JSUB_PROVIDERS",
         "os_api_key": "OPENSUBTITLES_API_KEY",
         "os_username": "OPENSUBTITLES_USERNAME",
         "os_password": "OPENSUBTITLES_PASSWORD",
@@ -120,6 +121,8 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["sub"] = args.sub
     if getattr(args, "user_id", None):
         cfg["user_id"] = args.user_id
+    if getattr(args, "providers", None):
+        cfg["providers"] = [x.strip() for x in args.providers.split(",") if x.strip()]
     for key in ("os_api_key", "os_username", "os_password"):
         val = cfg.get(key)
         if val:
@@ -175,6 +178,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
     common.add_argument("--media-root", help="local mount point corresponding to Jellyfin's media root, e.g. /mnt when Jellyfin sees /media/... (used by align to read files)")
     common.add_argument("--sub", help="explicit subtitle file to align (local mode), no provider/API key needed")
+    common.add_argument("--providers", default=argparse.SUPPRESS,
+                        help="comma-separated subliminal providers to use (default: opensubtitlescom,podnapisi,opensubtitles,addic7ed,subtitulamos); env JSUB_PROVIDERS")
     common.add_argument("--user-id", help="Jellyfin user id to pass as UserId (default: resolved via /Users/Me, then /Users admin list)")
     common.add_argument("--dry-run", action="store_true", help="do not modify anything")
     common.add_argument("--verbose", "-v", action="store_true")
@@ -307,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg=cfg.get("ffmpeg"),
             dry_run=bool(cfg.get("dry_run", False)),
             media_root=cfg.get("media_root"),
+            providers=cfg.get("providers"),
         )
         provider = OpenSubtitles() if (os.environ.get("OPENSUBTITLES_API_KEY") or os.environ.get("OPENSUBTITLES_USERNAME")) else None
         from .pipeline import collect_items
@@ -349,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
             model_dir=cfg.get("model_dir"),
             ffmpeg=cfg.get("ffmpeg"),
             dry_run=bool(cfg.get("dry_run", False)),
+            providers=cfg.get("providers"),
         )
         provider = OpenSubtitles() if (os.environ.get("OPENSUBTITLES_API_KEY") or os.environ.get("OPENSUBTITLES_USERNAME")) else None
         res = align_local_file(media_path, vcfg.language, vcfg, provider, sub_path=cfg.get("sub"))

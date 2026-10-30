@@ -30,6 +30,7 @@ log = logging.getLogger("jsub.verify")
 @dataclass
 class VerifyConfig:
     language: str = "eng"
+    providers: list[str] | None = None
     candidates: int = 5
     windows: int = 3
     window_seconds: float = 45.0
@@ -399,7 +400,7 @@ def verify_item(
         try:
             from .subliminal_provider import subliminal_candidates, subliminal_download
 
-            cands = subliminal_candidates(local_path, [cfg.language], limit=cfg.candidates)
+            cands = subliminal_candidates(local_path, [cfg.language], limit=cfg.candidates, providers=cfg.providers)
             log.info("[%s] subliminal -> %d candidates", item.name, len(cands))
             for c in cands:
                 try:

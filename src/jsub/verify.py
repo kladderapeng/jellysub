@@ -170,10 +170,17 @@ def _jellyfin_plugin_candidates(
     )
     subs: list[tuple[SubFile, Subtitle]] = []
     for cand in cands[:limit]:
-        if not client.download_remote_subtitle(item.id, cand.id):
+        try:
+            ok = client.download_remote_subtitle(item.id, cand.id)
+        except JellyfinError as e:
+            log.warning("download %s failed: %s", cand.id, e)
+            continue
+        if not ok:
+            log.warning("download %s returned non-2xx", cand.id)
             continue
         text = _read_sidecar_for(client, item, language, media_root)
         if text is None:
+            log.warning("downloaded %s but no sidecar appeared next to %s", cand.id, item.path)
             continue
         subs.append(
             (
@@ -205,7 +212,14 @@ def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_r
         entries = os.listdir(directory)
     except OSError:
         return None
-    best: tuple[float, str] | None = None
+    import logging as _logging
+
+    _logging.getLogger("jsub.verify").info(
+        "sidecar scan dir=%s base=%s want=%s files=%s", directory, base, sorted(want),
+        [n for n in entries if os.path.splitext(n)[1].lower() in (".srt", ".ass", ".ssa", ".vtt")],
+    )
+    exact: tuple[float, str] | None = None
+    any_lang: tuple[float, str] | None = None
     for name in entries:
         stem, ext = os.path.splitext(name)
         if ext.lower() not in (".srt", ".ass", ".ssa", ".vtt"):
@@ -214,15 +228,18 @@ def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_r
             continue
         parts = stem.split(".")
         lang_tag = parts[-1].lower() if len(parts) > 1 else ""
-        if lang_tag and lang_tag not in want:
-            continue
         full = os.path.join(directory, name)
         try:
             mtime = os.path.getmtime(full)
         except OSError:
             continue
-        if best is None or mtime > best[0]:
-            best = (mtime, full)
+        if lang_tag and lang_tag in want:
+            if exact is None or mtime > exact[0]:
+                exact = (mtime, full)
+        elif not lang_tag or lang_tag.isalpha():
+            if any_lang is None or mtime > any_lang[0]:
+                any_lang = (mtime, full)
+    best = exact or any_lang
     if best is None:
         return None
     with open(best[1], "rb") as f:

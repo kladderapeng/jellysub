@@ -3,14 +3,15 @@
 subliminal covers podnapisi, addic7ed, opensubtitles(.com/.org), tvsubtitles,
 subtis, subtitulamos, gestdown, bsplayer, napiprojekt. We use it as an
 additional candidate source alongside opensubtitles.com direct and the
-Jellyfin plugin: hash-based video identification + provider search +
+Jellyfin plugin: guessit-based video identification + per-provider query +
 download, all handled by subliminal.
 
-Requires the optional `subliminal` package (pip install 'jsub[subliminal]').
-Some providers need credentials (opensubtitles.com: OPENSUBTITLES_USERNAME/
-OPENSUBTITLES_PASSWORD or OPENSUBTITLESCOM_API_KEY env; addic7ed:
-ADDIC7ED_USERNAME/ADDIC7ED_PASSWORD). Keyless providers (podnapisi, tvsubtitles,
-...) work with no configuration.
+Requires the optional `subliminal` + `guessit` packages
+(pip install 'jsub[subliminal]'). Some providers need credentials
+(opensubtitles.com: OPENSUBTITLES_USERNAME/OPENSUBTITLES_PASSWORD or
+OPENSUBTITLESCOM_API_KEY; addic7ed: ADDIC7ED_USERNAME/ADDIC7ED_PASSWORD);
+keyless providers (podnapisi, opensubtitles.org, subtitulamos, ...) work
+with no configuration.
 """
 
 from __future__ import annotations
@@ -32,49 +33,221 @@ class SubCandidate:
     score: float = 0.0
 
 
+def _video(path: str):
+    from guessit import guessit
+    from subliminal.video import Video
+
+    return Video.fromguess(path, guessit(path))
+
+
+def _langs(languages: list[str]):
+    from subliminal.subtitle import Language
+
+    out = []
+    for lang in languages:
+        for code in (lang, lang[:2]):
+            try:
+                out.append(Language.fromietf(code))
+                break
+            except Exception:
+                continue
+    return out or [Language.fromietf("en")]
+
+
+def _provider_class(pname: str):
+    from subliminal import provider_manager
+
+    if pname not in provider_manager.names():
+        return None
+    return provider_manager[pname].plugin
+
+
+def _init_provider(provider, pname: str):
+    for init_name in ("initialize", "login"):
+        init = getattr(provider, init_name, None)
+        if callable(init):
+            try:
+                init()
+                return True
+            except Exception as e:
+                log.warning("subliminal provider %s %s failed: %s", pname, init_name, e)
+                return False
+    return True
+
+
+def _provider_credentials(pname: str) -> dict:
+    if pname in ("opensubtitlescom", "opensubtitlescomvip", "opensubtitles", "opensubtitlesvip"):
+        kw: dict = {}
+        u = os.environ.get("OPENSUBTITLES_USERNAME")
+        p = os.environ.get("OPENSUBTITLES_PASSWORD")
+        if u and p:
+            kw["username"], kw["password"] = u, p
+        key = os.environ.get("OPENSUBTITLESCOM_API_KEY") or os.environ.get("OPENSUBTITLES_API_KEY")
+        if key:
+            kw["apikey"] = key
+        return kw
+    if pname == "addic7ed":
+        u = os.environ.get("ADDIC7ED_USERNAME")
+        p = os.environ.get("ADDIC7ED_PASSWORD")
+        if u and p:
+            return {"username": u, "password": p}
+        return {}
+    return {}
+
+
+def _fix_dogpile_cache():
+    """subliminal 2.8's module-level cache region breaks with dogpile-cache >= 1.4
+    ('_lock_registry'); reconfigure it in-memory."""
+    try:
+        import subliminal.cache as sc
+        from dogpile.cache import make_region
+
+        sc.region.configure("dogpile.cache.memory", expiration_time=3600)
+    except Exception:
+        pass
+
+
+def _query_provider(pname: str, video_path: str, languages: list[str]):
+    """Query one subliminal provider; each provider has its own query signature."""
+    from subliminal.subtitle import Language
+
+    cls = _provider_class(pname)
+    if cls is None:
+        return []
+    v = _video(video_path)
+    langs = set(_langs(languages))
+    from subliminal.video import Episode as _Episode
+    is_episode = isinstance(v, _Episode) or getattr(v, "season", None) is not None
+    kwargs = _provider_credentials(pname)
+
+    if pname in ("podnapisi",):
+        found = []
+        for lang in langs:
+            kw = dict(kwargs)
+            if is_episode:
+                kw.update(season=v.season, episode=getattr(v, "episode", None))
+            found += cls().query(lang, getattr(v, "title", v.name), **kw)
+        return found
+    if pname in ("opensubtitles", "opensubtitlesvip"):
+        if not (os.environ.get("OPENSUBTITLES_USERNAME") and os.environ.get("OPENSUBTITLES_PASSWORD")):
+            log.info("subliminal provider %s needs OPENSUBTITLES_USERNAME/OPENSUBTITLES_PASSWORD (xmlrpc login), skipping", pname)
+            return []
+        kw = dict(kwargs)
+        from .media import opensubtitles_hash
+
+        try:
+            kw["moviehash"] = opensubtitles_hash(video_path)
+            kw["size"] = os.path.getsize(video_path)
+        except OSError:
+            pass
+        if is_episode:
+            kw["season"] = v.season
+            kw["episode"] = getattr(v, "episode", None) or 1
+            kw["query"] = (getattr(v, "series", None) or getattr(v, "title", ""))
+        else:
+            kw["query"] = getattr(v, "title", v.name)
+        kw.pop("moviehash", None) if not kw.get("size") else None
+        p = cls(**kwargs)
+        p.initialize()
+        return p.query(langs, **{k: x for k, x in kw.items() if x is not None})
+    if pname in ("opensubtitlescom", "opensubtitlescomvip"):
+        return cls(**kwargs).query(langs, **_episode_kwargs(v, kwargs, video_path))
+    if pname == "addic7ed":
+        if not is_episode:
+            return []
+        p = cls(**kwargs)
+        p.initialize()
+        return p.query(show_id=None, series=v.series, season=v.season)
+    if pname == "tvsubtitles":
+        if not is_episode:
+            return []
+        return cls(**kwargs).query(show_id=None, series=v.series, season=v.season,
+                                    episode=getattr(v, "episode", None))
+    if pname in ("subtitulamos",):
+        p = cls(**kwargs)
+        p.initialize()
+        if is_episode:
+            return p.query(series=getattr(v, "series", None) or getattr(v, "title", None),
+                           season=v.season, episode=getattr(v, "episode", None), languages=langs)
+        return p.query(languages=langs)
+    if pname == "subtis":
+        from subliminal.video import Movie
+
+        if not isinstance(v, Movie):
+            return []
+        return cls().query(v, langs)
+    if pname == "bsplayer":
+        kw = dict(kwargs)
+        try:
+            from .media import opensubtitles_hash
+
+            kw["file_hash"] = opensubtitles_hash(video_path)
+            kw["size"] = os.path.getsize(video_path)
+        except OSError:
+            pass
+        return cls().query(langs, **kw)
+    if pname == "napiprojekt":
+        try:
+            from .media import opensubtitles_hash
+
+            h = opensubtitles_hash(video_path)
+        except OSError:
+            return []
+        out = []
+        for lang in langs:
+            out += cls().query(lang, h)
+        return out
+    if pname == "gestdown":
+        if not is_episode:
+            return []
+        out = []
+        for lang in langs:
+            out += cls().query(None, v.series, v.season, getattr(v, "episode", None), lang)
+        return out
+    # generic fallback
+    p = cls(**kwargs)
+    if not _init_provider(p, pname):
+        return []
+    try:
+        return p.query(langs, v)
+    except TypeError:
+        try:
+            return p.query(v, langs)
+        except Exception:
+            return []
+
+
+def _episode_kwargs(v, kwargs: dict, video_path: str) -> dict:
+    kw = {}
+    if getattr(v, "type", "") == "episode" or getattr(v, "season", None) is not None:
+        kw["season"] = v.season
+        kw["episode"] = getattr(v, "episode", None)
+        kw["query"] = getattr(v, "series", None) or getattr(v, "title", "")
+    return kw
+
+
 def subliminal_candidates(
     video_path: str,
     languages: list[str],
     providers: list[str] | None = None,
     limit: int = 10,
 ) -> list[SubCandidate]:
-    """Search subliminal providers for subtitles matching the video file.
-
-    Returns candidates (not yet downloaded). Raises ImportError if the
-    optional `subliminal` dependency is missing.
-    """
+    """Search subliminal providers for subtitles matching the video file."""
     try:
-        from subliminal import Episode, Movie, Video, provider_manager
-        from subliminal.providers import Provider
+        import subliminal  # noqa: F401
+        import guessit  # noqa: F401
     except ImportError as e:
         raise ImportError(
-            "subliminal is not installed; run: pip install 'jsub[subliminal]'"
+            "subliminal/guessit not importable in this environment; "
+            "install with: pip install 'jsub[subliminal]' or apt python3-subliminal python3-guessit"
         ) from e
 
-    from subliminal.core import provider_registry
-
-    v = Video.fromguess(None, _guess_info(video_path))
-    if isinstance(v, Episode) or getattr(v, "series", None):
-        pass
-    langs = _subliminal_languages(languages)
-
-    chosen = providers or ["podnapisi", "opensubtitlescom", "opensubtitles", "addic7ed", "tvsubtitles"]
+    _fix_dogpile_cache()
+    chosen = providers or ["podnapisi", "opensubtitles", "opensubtitlescom", "addic7ed", "tvsubtitles", "subtitulamos"]
     out: list[SubCandidate] = []
     for pname in chosen:
-        if pname not in provider_registry:
-            log.warning("unknown subliminal provider %s, skipping", pname)
-            continue
-        provider_cls = provider_registry[pname]
-        kwargs = _provider_credentials(pname)
         try:
-            provider = provider_cls(**kwargs)
-            if hasattr(provider, "login") and callable(getattr(provider, "login")):
-                try:
-                    provider.login()
-                except Exception as e:
-                    log.warning("subliminal provider %s login failed: %s", pname, e)
-                    continue
-            found = provider.query(langs, v)
+            found = _query_provider(pname, video_path, languages)
             log.info("subliminal provider %s -> %d candidates", pname, len(found))
             for s in found:
                 out.append(
@@ -97,58 +270,37 @@ def subliminal_candidates(
 
 def subliminal_download(candidate: SubCandidate, video_path: str) -> bytes:
     """Download and decode a candidate subtitle via subliminal."""
-    from subliminal import Video
-    from subliminal.core import provider_registry
+    cls = _provider_class(candidate.provider)
+    if cls is None:
+        raise RuntimeError(f"unknown provider {candidate.provider}")
+    v = _video(video_path)
+    langs = set(_langs([candidate.language]))
+    kwargs = _provider_credentials(candidate.provider)
+    pname = candidate.provider
 
-    v = Video.fromguess(None, _guess_info(video_path))
-    provider = provider_registry[candidate.provider](**_provider_credentials(candidate.provider))
-    if hasattr(provider, "login") and callable(getattr(provider, "login")):
-        provider.login()
-    subs = provider.query(_subliminal_languages([candidate.language]), v)
+    if pname == "podnapisi":
+        provider = cls()
+        lang = next(iter(langs))
+        kw = dict(kwargs)
+        if getattr(v, "season", None) is not None:
+            kw.update(season=v.season, episode=getattr(v, "episode", None))
+        subs = provider.query(lang, getattr(v, "title", v.name), **kw)
+    elif pname in ("opensubtitles", "opensubtitlesvip", "opensubtitlescom", "opensubtitlescomvip"):
+        found = _query_provider(pname, video_path, [candidate.language])
+        subs = found
+    else:
+        subs = _query_provider(pname, video_path, [candidate.language])
+
     sub = next((s for s in subs if str(s.id) == candidate.subtitle_id), None)
+    if sub is None and subs:
+        sub = subs[0]
     if sub is None:
-        raise RuntimeError(f"candidate {candidate.subtitle_id} not found on re-query")
+        raise RuntimeError(f"candidate {candidate.subtitle_id} not found on re-query ({pname})")
+    provider = sub.provider if hasattr(sub, "provider") else None
+    if provider is None:
+        provider = cls(**kwargs)
+        _init_provider(provider, pname)
     provider.download_subtitle(sub)
+    if not getattr(sub, "content", None):
+        raise RuntimeError("download returned empty content")
     return sub.content
-
-
-def _guess_info(path: str) -> dict:
-    import os
-
-    from guessit import guessit
-
-    return guessit(path)
-
-
-def _subliminal_languages(languages: list[str]):
-    from subliminal import Language
-
-    out = []
-    for lang in languages:
-        for code in (lang, lang[:2]):
-            try:
-                out.append(Language.fromietf(code))
-                break
-            except Exception:
-                continue
-    return out or [Language.fromietf("en")]
-
-
-def _provider_credentials(pname: str) -> dict:
-    if pname in ("opensubtitlescom", "opensubtitles"):
-        kw: dict = {}
-        u = os.environ.get("OPENSUBTITLES_USERNAME")
-        p = os.environ.get("OPENSUBTITLES_PASSWORD")
-        if u and p:
-            kw["username"], kw["password"] = u, p
-        key = os.environ.get("OPENSUBTITLESCOM_API_KEY") or os.environ.get("OPENSUBTITLES_API_KEY")
-        if key:
-            kw["apikey"] = key
-        return kw
-    if pname == "addic7ed":
-        u = os.environ.get("ADDIC7ED_USERNAME")
-        p = os.environ.get("ADDIC7ED_PASSWORD")
-        if u and p:
-            return {"username": u, "password": p}
-        return {}
-    return {}

@@ -146,12 +146,15 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
     kwargs = _provider_credentials(pname)
 
     if pname in ("podnapisi",):
+        p = cls()
+        p.initialize()
         found = []
         for lang in langs:
             kw = dict(kwargs)
             if is_episode:
                 kw.update(season=v.season, episode=getattr(v, "episode", None))
-            found += cls().query(lang, getattr(v, "title", v.name), **kw)
+            keyword = getattr(v, "series", None) or getattr(v, "title", None) or v.name
+            found += p.query(lang, keyword, **kw)
         return found
     if pname in ("opensubtitles", "opensubtitlesvip"):
         if not (os.environ.get("OPENSUBTITLES_USERNAME") and os.environ.get("OPENSUBTITLES_PASSWORD")):
@@ -176,7 +179,11 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
         p.initialize()
         return p.query(langs, **{k: x for k, x in kw.items() if x is not None})
     if pname in ("opensubtitlescom", "opensubtitlescomvip"):
-        return cls(**kwargs).query(langs, **_episode_kwargs(v, kwargs, video_path))
+        p = cls(**kwargs)
+        p.initialize()
+        if not getattr(p, "session", None) or not getattr(p, "token", None):
+            log.info("opensubtitlescom needs OPENSUBTITLES_USERNAME/OPENSUBTITLES_PASSWORD (or vip token) to download; query-only without login")
+        return p.query(langs, **_episode_kwargs(v, kwargs, video_path))
     if pname == "addic7ed":
         if not is_episode:
             return []
@@ -186,8 +193,8 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
     if pname == "tvsubtitles":
         if not is_episode:
             return []
-        return cls(**kwargs).query(show_id=None, series=v.series, season=v.season,
-                                    episode=getattr(v, "episode", None))
+        log.info("tvsubtitles needs a numeric show id (imdb/tvdb); skipping text search")
+        return []
     if pname in ("subtitulamos",):
         p = cls(**kwargs)
         p.initialize()

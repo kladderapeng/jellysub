@@ -257,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=bool(cfg.get("dry_run", False)),
             media_root=cfg.get("media_root"),
         )
-        provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
+        provider = OpenSubtitles() if (os.environ.get("OPENSUBTITLES_API_KEY") or os.environ.get("OPENSUBTITLES_USERNAME")) else None
         from .pipeline import collect_items
 
         vpipe = build_pipeline_config(cfg, args)
@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
             ffmpeg=cfg.get("ffmpeg"),
             dry_run=bool(cfg.get("dry_run", False)),
         )
-        provider = OpenSubtitles() if os.environ.get("OPENSUBTITLES_API_KEY") else None
+        provider = OpenSubtitles() if (os.environ.get("OPENSUBTITLES_API_KEY") or os.environ.get("OPENSUBTITLES_USERNAME")) else None
         res = align_local_file(media_path, vcfg.language, vcfg, provider, sub_path=cfg.get("sub"))
         log.info(
             "%-12s %s -> %s speed=%.5f offset=%.2fs rms=%.3fs anchors=%d %s",

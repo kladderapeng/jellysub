@@ -16,6 +16,9 @@ from dataclasses import dataclass, field
 
 BASE = "https://api.opensubtitles.com/api/v1"
 USER_AGENT = "jsub v0.1"
+# Public app key shipped with subliminal (search-only); downloads additionally
+# need a Bearer token from /login with OPENSUBTITLES_USERNAME/PASSWORD.
+FALLBACK_API_KEY = "mij33pjc3kOlup1qOKxnWWxvle2kFbMH"
 
 
 class ProviderError(Exception):
@@ -48,25 +51,34 @@ class MovieHit:
 
 class OpenSubtitles:
     def __init__(self, api_key: str | None = None, timeout: float = 30.0):
-        self.api_key = api_key or os.environ.get("OPENSUBTITLES_API_KEY", "")
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENSUBTITLES_API_KEY")
+            or os.environ.get("OPENSUBTITLESCOM_API_KEY")
+            or FALLBACK_API_KEY
+        )
         self.timeout = timeout
         self._token: str | None = None
         user = os.environ.get("OPENSUBTITLES_USERNAME")
         pw = os.environ.get("OPENSUBTITLES_PASSWORD")
-        if user and pw and self.api_key:
+        if user and pw:
             try:
                 data = self._request(
                     "POST", "/login",
                     json_body={"username": user, "password": pw},
                 )
                 self._token = data.get("token")
+                log_token = "ok"
             except ProviderError as e:
                 raise ProviderError(f"opensubtitles login failed: {e}") from e
+            import logging as _l
+
+            _l.getLogger("jsub.providers").info("opensubtitles login %s", log_token)
 
     def _request(self, method: str, path: str, params: dict | None = None,
                  json_body: dict | None = None, raw: bool = False):
         if not self.api_key:
-            raise ProviderError("OPENSUBTITLES_API_KEY is not set")
+            raise ProviderError("no opensubtitles api key (set OPENSUBTITLES_API_KEY)")
         url = BASE + path
         if params:
             clean = {k: v for k, v in params.items() if v is not None}

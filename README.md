@@ -199,15 +199,17 @@ recommended way to keep secrets like passwords out of shell history:
   "libraries": "optional,comma,separated,ids",
   "min_score": 0.0,
   "dry_run": false,
-  "os_api_key": "opensubtitles-app-key",
   "os_username": "opensubtitles-account@example.com",
   "os_password": "any chars here, no shell quoting needed"
 }
 ```
 
-`os_api_key`/`os_username`/`os_password` map to `OPENSUBTITLES_API_KEY` /
-`OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (env still wins if both
-are set). Protect the file: `chmod 600 ~/.config/jsub/config.json`.
+`os_username`/`os_password` map to `OPENSUBTITLES_USERNAME` /
+`OPENSUBTITLES_PASSWORD` (env still wins if both are set). **No API key is
+needed**: with user:pass, jsub logs in (`POST /login`) for the download
+Bearer token and uses the public app key that ships with subliminal for
+searches. `os_api_key` is optional. Protect the file:
+`chmod 600 ~/.config/jsub/config.json`.
 
 Languages accept ISO 639-1 (`en`) or 639-2/3 (`eng`); matching is tolerant of
 either spelling.

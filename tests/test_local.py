@@ -173,3 +173,39 @@ def test_config_file_supplies_opensubtitles_credentials(tmp_path, monkeypatch):
     assert cfg["os_password"] == "p@$$w0rd#!"
     assert __import__("os").environ["OPENSUBTITLES_PASSWORD"] == "p@$$w0rd#!"
     assert __import__("os").environ["OPENSUBTITLES_API_KEY"] == "KEY123"
+
+
+def test_provider_works_with_userpass_only_no_api_key(monkeypatch):
+    """No OPENSUBTITLES_API_KEY: fallback app key + login token from user/pass."""
+    from jsub.providers import OpenSubtitles
+
+    monkeypatch.delenv("OPENSUBTITLES_API_KEY", raising=False)
+    monkeypatch.setenv("OPENSUBTITLES_USERNAME", "u")
+    monkeypatch.setenv("OPENSUBTITLES_PASSWORD", "p")
+
+    calls = []
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._p = payload
+        def read(self):
+            import json as j
+            return j.dumps(self._p).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        status = 200
+
+    import urllib.request
+    real = urllib.request.urlopen
+    def fake(req, timeout=None):
+        calls.append(req.full_url)
+        if req.full_url.endswith("/login"):
+            return FakeResp({"token": "tok123"})
+        return FakeResp({"data": []})
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    p = OpenSubtitles()
+    assert p.api_key  # fallback key present without env
+    assert p._token == "tok123"
+    assert any(u.endswith("/login") for u in calls)

@@ -113,6 +113,61 @@ class OpenSubtitles:
             )
         return hits
 
+    def search_by_query(
+        self,
+        query: str,
+        languages: str = "en",
+        season: int | None = None,
+        episode: int | None = None,
+        parent_imdb_id: str | None = None,
+        year: int | None = None,
+        moviehash: str | None = None,
+    ) -> list[MovieHit]:
+        params: dict = {"query": query, "languages": languages}
+        if season is not None:
+            params["season_number"] = season
+        if episode is not None:
+            params["episode_number"] = episode
+        if parent_imdb_id:
+            params["parent_imdb_id"] = parent_imdb_id.lstrip("tt")
+        if year:
+            params["year"] = year
+        if moviehash:
+            params["moviehash"] = moviehash
+        data = self._request("GET", "/subtitles", params=params)
+        return self._parse_hits(data)
+
+    def _parse_hits(self, data: dict) -> list[MovieHit]:
+        hits: list[MovieHit] = []
+        for entry in data.get("data", []):
+            attrs = entry.get("attributes", {})
+            files = [
+                SubFile(
+                    file_id=int(f.get("file_id", 0)),
+                    file_name=str(f.get("attributes", {}).get("files", [{}])[0].get("file_name", "")) if f.get("attributes", {}).get("files") else str(f.get("attributes", {}).get("release", "")),
+                    language=str(f.get("attributes", {}).get("language", "")),
+                    format=str(f.get("attributes", {}).get("format", "")),
+                    download_count=int(f.get("attributes", {}).get("download_count", 0) or 0),
+                    rating=float(f.get("attributes", {}).get("ratings", 0) or 0),
+                    hearing_impaired=bool(f.get("attributes", {}).get("hearing_impaired", 0)),
+                    release=str(f.get("attributes", {}).get("release", "")),
+                )
+                for f in attrs.get("files", [])
+            ]
+            fd = attrs.get("feature_details", {})
+            hits.append(
+                MovieHit(
+                    moviehash_match=bool(attrs.get("moviehash_match", False)),
+                    feature_id=attrs.get("feature_id"),
+                    title=str(fd.get("title", "")),
+                    year=fd.get("year"),
+                    imdb_id=str(attrs.get("imdb_id", "")) or None,
+                    tmdb_id=attrs.get("tmdb_id"),
+                    files=files,
+                )
+            )
+        return hits
+
     def search_by_imdb(self, imdb_id: str, languages: str = "en") -> list[MovieHit]:
         data = self._request(
             "GET", "/subtitles",

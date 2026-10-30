@@ -225,15 +225,30 @@ def _read_sidecar_for(client: JellyfinClient, item: Item, language: str, media_r
 
 
 def _provider_candidates(
-    provider: OpenSubtitles, item: Item, moviehash: str, language: str, limit: int
+    provider: OpenSubtitles, item: Item, moviehash: str, language: str, limit: int,
+    media_path: str | None = None,
 ) -> list[tuple[SubFile, Subtitle]]:
+    from .media import query_terms_from_path
+
     lang2 = language[:2]
-    hits = provider.search_by_hash(moviehash, languages=lang2)
-    files = provider.best_files(hits, language, limit=limit)
+    files = provider.best_files(provider.search_by_hash(moviehash, languages=lang2), language, limit=limit)
     if not files:
         imdb = (item.provider_ids or {}).get("Imdb")
         if imdb:
-            hits = provider.search_by_imdb(imdb, languages=lang2)
+            files = provider.best_files(provider.search_by_imdb(imdb, languages=lang2), language, limit=limit)
+    if not files and media_path:
+        terms = query_terms_from_path(media_path)
+        parent_imdb = (item.provider_ids or {}).get("Imdb") if terms.get("season") else None
+        log.info("[%s] hash/imdb search empty, falling back to query %r (season=%s episode=%s)",
+                 item.name, terms["query"], terms.get("season"), terms.get("episode"))
+        hits = provider.search_by_query(
+            terms["query"], languages=lang2,
+            season=terms.get("season"), episode=terms.get("episode"),
+            parent_imdb_id=parent_imdb, moviehash=moviehash,
+        )
+        files = provider.best_files(hits, language, limit=limit)
+        if not files:
+            hits = provider.search_by_query(terms.get("series") or terms["query"], languages=lang2)
             files = provider.best_files(hits, language, limit=limit)
     subs: list[tuple[SubFile, Subtitle]] = []
     for f in files:
@@ -265,7 +280,7 @@ def verify_item(
     source = "none"
     if provider is not None and getattr(provider, "api_key", ""):
         try:
-            subs = _provider_candidates(provider, item, moviehash, cfg.language, cfg.candidates)
+            subs = _provider_candidates(provider, item, moviehash, cfg.language, cfg.candidates, local_path)
             source = "opensubtitles-api"
         except ProviderError as e:
             log.warning("[%s] opensubtitles API failed (%s), falling back to Jellyfin plugin search", item.name, e)

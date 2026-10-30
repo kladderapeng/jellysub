@@ -98,3 +98,43 @@ def test_local_with_explicit_sub_no_provider(tmp_path, monkeypatch):
     assert res.action == "aligned"
     assert res.chosen == "whatever.srt"
     assert os.path.exists(str(m.with_suffix("")) + ".en.srt")
+
+
+def test_query_terms_from_path_episode_and_movie():
+    from jsub.media import query_terms_from_path
+
+    t = query_terms_from_path("/media/series/Mum/Season 01/Mum S01E01.mp4")
+    assert t["series"] == "Mum" and t["season"] == 1 and t["episode"] == 1
+    assert t["query"] == "Mum S01E01"
+    t = query_terms_from_path("/data/movies/Movie (1920)/Movie (1920).mkv")
+    assert "season" not in t and t["query"] == "Movie (1920)"
+
+
+def test_provider_query_fallback(tmp_path, monkeypatch):
+    from jsub.providers import OpenSubtitles, SubFile
+    from jsub.local import align_local_file
+    from jsub.verify import VerifyConfig
+
+    calls = []
+
+    class P(OpenSubtitles):
+        def __init__(self):
+            self.api_key = "k"
+        def search_by_hash(self, moviehash, languages="en"):
+            calls.append(("hash", moviehash))
+            return []
+        def search_by_query(self, query, languages="en", **kw):
+            calls.append(("query", query, kw))
+            return [type("H", (), {"files": [SubFile(file_id=7, file_name="q.srt", language="en", format="srt", download_count=99, rating=9.0)]})()]
+        def download(self, file_id):
+            return SRT.encode()
+
+    m = tmp_path / "Mum" / "Season 01" / "Mum S01E01.mp4"
+    m.parent.mkdir(parents=True)
+    m.write_bytes(b"\0" * 300_000)
+    monkeypatch.setattr(local_mod, "transcribe_media", lambda *a, **k: fake_words())
+    monkeypatch.setattr(local_mod, "_probe_runtime_s", lambda *a, **k: 200.0)
+    res = align_local_file(str(m), "eng", VerifyConfig(language="eng"), provider=P())
+    assert calls[0][0] == "hash"
+    assert any(c[0] == "query" and "S01E01" in c[1] and c[2].get("season") == 1 for c in calls), calls
+    assert res.action == "aligned" and res.chosen == "q.srt"

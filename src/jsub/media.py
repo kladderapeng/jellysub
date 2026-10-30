@@ -7,6 +7,7 @@ files directly via the Path field from the Jellyfin API.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -85,6 +86,30 @@ def extract_audio_window(
             f"ffmpeg audio extraction failed: {proc.stderr.strip()[:400]}"
         )
     return AudioWindow(path=out_wav, start_s=start_s, duration_s=duration_s)
+
+
+SXXEYY_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,3})")
+
+
+def query_terms_from_path(path: str) -> dict:
+    """Extract search terms from a media path.
+
+    Returns {"query": "Mum S01E01", "season": 1, "episode": 1, "series": "Mum"}
+    for /media/series/Mum/Season 01/Mum S01E01.mp4 — falls back to the bare
+    filename stem for movies.
+    """
+    import re as _re
+
+    base = os.path.splitext(os.path.basename(path))[0]
+    m = SXXEYY_RE.search(base)
+    out: dict = {"query": base}
+    if m:
+        out["season"] = int(m.group(1))
+        out["episode"] = int(m.group(2))
+        prefix = base[: m.start()].strip(" _-.")
+        out["series"] = prefix or base
+        out["query"] = f"{out['series']} {m.group(0).upper()}"
+    return out
 
 
 def probe_audio_streams(media_path: str, ffmpeg: str | None = None) -> list[dict]:

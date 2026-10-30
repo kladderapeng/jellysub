@@ -93,9 +93,19 @@ def align_local_file(
         source = "sidecar"
     if provider is not None and getattr(provider, "api_key", ""):
         try:
+            from .media import query_terms_from_path
+
             lang2 = language[:2]
             hits = provider.search_by_hash(moviehash, languages=lang2)
             files = provider.best_files(hits, language, limit=vcfg.candidates)
+            if not files:
+                terms = query_terms_from_path(media_path)
+                hits = provider.search_by_query(
+                    terms["query"], languages=lang2,
+                    season=terms.get("season"), episode=terms.get("episode"),
+                    moviehash=moviehash,
+                )
+                files = provider.best_files(hits, language, limit=vcfg.candidates)
             api_subs = []
             for f in files:
                 try:

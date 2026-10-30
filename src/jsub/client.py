@@ -321,6 +321,9 @@ class JellyfinClient:
         return []
 
     def get_item(self, item_id: str, user_id: str | None = None) -> Item:
+        import logging as _logging
+
+        _log = _logging.getLogger("jsub.client")
         fields = "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds"
         routes = [
             (f"/Users/{user_id}/Items/{item_id}", {"Fields": fields}) if user_id else None,
@@ -334,8 +337,10 @@ class JellyfinClient:
             route, params = entry
             try:
                 data = self._get_json(route, params=params)
+                _log.info("get_item %s OK via %s", item_id, route)
                 return Item.from_dict(data or {})
             except JellyfinError as e:
+                _log.info("get_item %s via %s -> HTTP %s", item_id, route, e.status)
                 last_err = e
                 if e.status not in (400, 404):
                     raise

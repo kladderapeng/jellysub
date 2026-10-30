@@ -396,6 +396,26 @@ def verify_item(
         except JellyfinError as e:
             log.warning("[%s] Jellyfin remote subtitle search failed: %s", item.name, e)
     if not subs:
+        try:
+            from .subliminal_provider import subliminal_candidates, subliminal_download
+
+            cands = subliminal_candidates(local_path, [cfg.language], limit=cfg.candidates)
+            log.info("[%s] subliminal -> %d candidates", item.name, len(cands))
+            for c in cands:
+                try:
+                    raw = subliminal_download(c, local_path)
+                    subs.append((SubFile(file_id=0, file_name=c.name, language=c.language,
+                                         format=c.format, download_count=0, rating=c.score),
+                                 parse_srt(decode_subtitle(raw))))
+                except Exception as e:
+                    log.warning("[%s] subliminal download %s failed: %s", item.name, c.subtitle_id, e)
+            if subs:
+                source = "subliminal"
+        except ImportError:
+            log.info("[%s] subliminal not installed, skipping", item.name)
+        except Exception as e:
+            log.warning("[%s] subliminal search failed: %s", item.name, e)
+    if not subs:
         sidecar = _read_sidecar_for(client, item, cfg.language, cfg.media_root)
         if sidecar is not None:
             from .providers import SubFile as _SF

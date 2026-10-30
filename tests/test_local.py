@@ -138,3 +138,20 @@ def test_provider_query_fallback(tmp_path, monkeypatch):
     assert calls[0][0] == "hash"
     assert any(c[0] == "query" and "S01E01" in c[1] and c[2].get("season") == 1 for c in calls), calls
     assert res.action == "aligned" and res.chosen == "q.srt"
+
+
+def test_subliminal_candidate_source_used_when_no_others(tmp_path, monkeypatch):
+    """No API key, no sidecar, no --sub: subliminal provides the candidate."""
+    import jsub.subliminal_provider as sp
+
+    monkeypatch.setitem(__import__("sys").modules, "jsub.subliminal_provider", sp)
+    monkeypatch.setattr(sp, "subliminal_candidates", lambda *a, **k: [sp.SubCandidate("podnapisi", "42", "Mum.S01E01.srt", "en", "srt", 90.0)])
+    monkeypatch.setattr(sp, "subliminal_download", lambda c, p: SRT.encode())
+
+    m = tmp_path / "Mum S01E01.mp4"
+    m.write_bytes(b"\0" * 300_000)
+    monkeypatch.setattr(local_mod, "transcribe_media", lambda *a, **k: fake_words())
+    monkeypatch.setattr(local_mod, "_probe_runtime_s", lambda *a, **k: 200.0)
+    res = align_local_file(str(m), "eng", VerifyConfig(language="eng"), provider=None)
+    assert res.action == "aligned"
+    assert res.chosen == "Mum.S01E01.srt"

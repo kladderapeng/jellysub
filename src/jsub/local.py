@@ -118,7 +118,27 @@ def align_local_file(
         except ProviderError as e:
             log.warning("opensubtitles API failed (%s), using sidecar only", e)
     if not subs:
-        return LocalResult(media_path, "no-match", detail="no candidate subtitles (set OPENSUBTITLES_API_KEY or place a sidecar .srt next to the file)")
+        try:
+            from .subliminal_provider import subliminal_candidates, subliminal_download
+
+            cands = subliminal_candidates(media_path, [language], limit=vcfg.candidates)
+            log.info("[%s] subliminal -> %d candidates", os.path.basename(media_path), len(cands))
+            for c in cands:
+                try:
+                    raw = subliminal_download(c, media_path)
+                    subs.append((SubFile(file_id=0, file_name=c.name, language=c.language,
+                                         format=c.format, download_count=0, rating=c.score),
+                                 parse_srt(decode_subtitle(raw))))
+                except Exception as e:
+                    log.warning("subliminal download %s failed: %s", c.subtitle_id, e)
+            if subs:
+                source = "subliminal"
+        except ImportError:
+            log.info("subliminal not installed, skipping")
+        except Exception as e:
+            log.warning("subliminal search failed: %s", e)
+    if not subs:
+        return LocalResult(media_path, "no-match", detail="no candidate subtitles (set OPENSUBTITLES_API_KEY, install subliminal, or place a sidecar .srt next to the file)")
     log.info("[%s] %d candidate subtitle(s) via %s", os.path.basename(media_path), len(subs), source)
 
     words = transcribe_media(media_path, runtime_s, vcfg)

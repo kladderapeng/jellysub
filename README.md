@@ -95,6 +95,17 @@ reads the downloaded sidecar file from the media directory. Set
 queries — the moviehash lookup there finds the exact release even when the
 plugin's search doesn't. Without either, `align` reports `no-match`.
 
+Additionally, `pip install -e '.[subliminal]'` enables the
+[subliminal](https://subliminal.readthedocs.io/) multi-provider backend
+(podnapisi, addic7ed, opensubtitles, tvsubtitles, subtitulamos, ...) as a
+candidate source in both `align` and `local`, using hash/name-based video
+identification via guessit. Keyless providers (podnapisi, tvsubtitles, ...)
+work with no credentials; opensubtitles.com/addic7ed read
+`OPENSUBTITLES_USERNAME`/`OPENSUBTITLES_PASSWORD`/`OPENSUBTITLESCOM_API_KEY`
+and `ADDIC7ED_USERNAME`/`ADDIC7ED_PASSWORD` from the environment.
+Candidate order: opensubtitles.com API (if key) → Jellyfin plugin →
+subliminal providers → existing sidecar file.
+
 Vosk ASR models (~40 MB each, per language) are data, not packages — they
 auto-download on first use into `JSUB_MODEL_DIR` (default `~/.cache/jsub/models`).
 

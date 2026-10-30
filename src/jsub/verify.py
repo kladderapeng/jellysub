@@ -139,14 +139,21 @@ def _jellyfin_plugin_candidates(
 ) -> list[tuple[SubFile, Subtitle]]:
     """Candidate subtitles via Jellyfin's own remote search (Open Subtitles
     plugin installed server-side, no API key needed), read back from disk."""
-    from .core import iso639_2_to_3
+    from .client import language_aliases
 
-    cands = client.search_remote_subtitles(item.id, language)
-    lang3 = iso639_2_to_3(language)
+    want = {a.lower() for a in language_aliases(language)}
+    cands = []
+    for lang in sorted(want):
+        try:
+            cands.extend(client.search_remote_subtitles(item.id, lang))
+        except JellyfinError as e:
+            log.warning("remote search for %s failed: %s", lang, e)
+    seen = set()
+    cands = [c for c in cands if not (c.id in seen or seen.add(c.id))]
     cands = [
         c
         for c in cands
-        if (c.language or "").lower() in (language.lower(), lang3)
+        if (c.language or "").lower() in want
         and (c.format or "srt").lower() in ("srt", "ass", "ssa", "vtt")
     ]
     cands.sort(

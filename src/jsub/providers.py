@@ -158,11 +158,13 @@ class OpenSubtitles:
             return data
 
     def best_files(self, hits: list[MovieHit], language: str, limit: int = 5) -> list[SubFile]:
-        lang2 = language[:2].lower()
+        from .client import language_aliases
+
+        want = {a.lower() for a in language_aliases(language)}
         cands: list[SubFile] = []
         for hit in hits:
             for f in hit.files:
-                if (f.language or "").lower().startswith(lang2) and f.format.lower() in ("srt", "ass", "ssa"):
+                if (f.language or "").lower() in want and f.format.lower() in ("srt", "ass", "ssa"):
                     cands.append(f)
         cands.sort(key=lambda f: (f.rating, f.download_count), reverse=True)
         return cands[:limit]

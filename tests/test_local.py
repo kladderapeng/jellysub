@@ -225,3 +225,16 @@ def test_config_autoloaded_from_xdg_default(tmp_path, monkeypatch):
     args = m.build_parser().parse_args(["info"])
     cfg = m.load_config(args)
     assert cfg["url"] == "http://auto:8096" and cfg["api_key"] == "autokey"
+
+
+def test_config_tolerates_invalid_escape_and_comments(tmp_path, monkeypatch):
+    import jsub.__main__ as m
+
+    monkeypatch.delenv("OPENSUBTITLES_PASSWORD", raising=False)
+    cfg = tmp_path / "c.json"
+    cfg.write_text('{\n  // comment\n  "url": "http://x",\n  "os_password": "C:\\new\\pw",\n}\n')
+    monkeypatch.delenv("JSUB_CONFIG", raising=False)
+    args = m.build_parser().parse_args(["--config", str(cfg), "info"])
+    out = m.load_config(args)
+    assert out["url"] == "http://x"
+    assert out["os_password"] == "C:\new\\pw"

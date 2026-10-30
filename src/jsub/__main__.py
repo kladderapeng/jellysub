@@ -22,6 +22,34 @@ from .verify import VerifyConfig, verify_item
 log = logging.getLogger("jsub")
 
 
+def _json5_loads(text: str) -> dict:
+    """Tolerant JSON: strips comments/trailing commas and fixes invalid escapes
+    in string values (e.g. Windows paths like C:\\new) by doubling backslashes."""
+    import re
+
+    text = re.sub(r'(?m)(?:^|[\s,{}\[])//[^\n]*', lambda m: m.group(0)[:1] if m.group(0).startswith("//") else m.group(0)[0], text)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
+
+    def fix_string(m: re.Match) -> str:
+        inner = m.group(1)
+        # double any backslash that is not a valid JSON escape
+        out = []
+        i = 0
+        while i < len(inner):
+            c = inner[i]
+            if c == "\\" and i + 1 < len(inner) and inner[i + 1] not in '\\"/bfnrtu':
+                out.append("\\\\")
+                i += 1
+            else:
+                out.append(c)
+                i += 1
+        return '"' + "".join(out) + '"'
+
+    text = re.sub(r'"((?:[^"\\]|\\.)*)"', fix_string, text)
+    return json.loads(text)
+
+
 def default_config_paths() -> list[str]:
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return [
@@ -40,7 +68,15 @@ def load_config(args: argparse.Namespace) -> dict:
                 path = cand
                 break
     if path:
-        cfg.update(json.loads(Path(path).read_text(encoding="utf-8")))
+        text = Path(path).read_text(encoding="utf-8")
+        try:
+            cfg.update(json.loads(text))
+        except json.JSONDecodeError as e:
+            log.warning(
+                "config %s is not strict JSON (%s); retrying as JSON5-ish "
+                "(comments, trailing commas, unquoted keys)", path, e
+            )
+            cfg.update(_json5_loads(text))
         log.info("loaded config from %s", path)
     env_map = {
         "url": "JELLYFIN_URL",

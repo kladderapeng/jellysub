@@ -153,8 +153,22 @@ def _jellyfin_plugin_candidates(
             log.warning("remote search for %s failed: %s", lang, e)
     seen = set()
     cands = [c for c in cands if not (c.id in seen or seen.add(c.id))]
-    log.info("plugin search: %d candidates after dedupe, langs=%s",
-             len(cands), sorted({(c.language or "?") for c in cands}))
+    # the en/eng variants are the same upstream file; dedupe by the numeric
+    # opensubtitles file id embedded in the candidate id (..._srt-<lang>-<fileid>[-sdh])
+    import re as _re
+
+    file_ids: dict[str, object] = {}
+    deduped = []
+    for c in cands:
+        m = _re.search(r"-(\d{5,})(?:-sdh)?$", c.id)
+        key = m.group(1) if m else c.id
+        if key in file_ids:
+            continue
+        file_ids[key] = c
+        deduped.append(c)
+    cands = deduped
+    log.info("plugin search: %d candidates after dedupe (langs=%s, unique files=%d)",
+             len(cands), sorted({(c.language or "?") for c in cands}), len(file_ids))
     cands = [
         c
         for c in cands

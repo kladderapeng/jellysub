@@ -209,7 +209,7 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
             try:
                 p.login()
             except Exception as e:
-                log.warning("opensubtitlescom login failed: %s (download will be rejected; search still works)", e)
+                log.warning("opensubtitlescom login failed: %s (downloads will fail; search still works)", e)
         elif not kwargs.get("username"):
             log.info("opensubtitlescom: no OPENSUBTITLES_USERNAME/PASSWORD -> query-only, /download will 401/429")
         return p.query(langs, **_episode_kwargs(v, kwargs, video_path))
@@ -365,7 +365,10 @@ def subliminal_download(candidate: SubCandidate, video_path: str) -> bytes:
         provider = cls(**kwargs)
         provider.initialize()
         if kwargs.get("username") and kwargs.get("password"):
-            provider.login()
+            try:
+                provider.login()
+            except Exception as e:
+                log.warning("opensubtitlescom login failed during query: %s (downloads will fail)", e)
         subs = provider.query(set(_langs([candidate.language])),
                               **{k: x for k, x in _episode_kwargs(v, kwargs, video_path).items() if x is not None})
     elif pname in ("opensubtitles", "opensubtitlesvip"):

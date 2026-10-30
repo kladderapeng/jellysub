@@ -140,7 +140,7 @@ def fit_uploaded(
     dry_run: bool = False,
 ) -> ItemResult:
     """Re-read the item, take its newest matching external subtitle, shift/clamp, re-upload."""
-    fresh = client.get_item(item.id)
+    fresh = client.get_item(item.id, user_id=getattr(client, '_user_id', None) or client.current_user_id())
     subs = [s for s in fresh.subtitle_streams() if s.is_external]
     target = None
     wanted = {a.lower() for a in language_aliases(language)}

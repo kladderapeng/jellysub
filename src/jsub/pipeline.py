@@ -67,7 +67,7 @@ def run_pipeline(client: JellyfinClient, cfg: PipelineConfig) -> list[ItemResult
                 for language in cfg.fetch.languages:
                     fresh = None
                     try:
-                        fresh = client.get_item(item.id)
+                        fresh = client.get_item(item.id, user_id=getattr(client, '_user_id', None) or client.current_user_id())
                     except JellyfinError as e:
                         log.warning("[%s] item lookup failed: %s", item.name, e)
                         continue

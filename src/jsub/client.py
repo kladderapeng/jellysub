@@ -320,12 +320,19 @@ class JellyfinClient:
         log.info("path lookup %s: NO match; sample item paths: %s", target, sample)
         return []
 
-    def get_item(self, item_id: str) -> Item:
-        data = self._get_json(
-            f"/Items/{item_id}",
-            params={"Fields": "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds"},
-        )
+    def get_item(self, item_id: str, user_id: str | None = None) -> Item:
+        params = {"Fields": "MediaStreams,MediaSources,Path,RunTimeTicks,ProviderIds"}
+        if user_id:
+            params["UserId"] = user_id
+        data = self._get_json(f"/Items/{item_id}", params=params)
         return Item.from_dict(data or {})
+
+    def current_user_id(self) -> str | None:
+        try:
+            data = self._get_json("/Users/Me")
+            return str(data.get("Id")) if data else None
+        except JellyfinError:
+            return None
 
     def search_remote_subtitles(
         self, item_id: str, language: str | None = None

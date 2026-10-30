@@ -207,11 +207,17 @@ def _read_via_api(client: JellyfinClient, item: Item, language: str) -> str | No
     from .client import language_aliases
 
     want = {a.lower() for a in language_aliases(language)}
+    user_id = getattr(client, "_user_id", None) or client.current_user_id()
+    if user_id:
+        client._user_id = user_id
     try:
-        fresh = client.get_item(item.id)
-    except JellyfinError as e:
-        log.warning("[%s] re-read item failed: %s", item.name, e)
-        return None
+        fresh = client.get_item(item.id, user_id=user_id)
+    except JellyfinError:
+        try:
+            fresh = client.get_item(item.id)
+        except JellyfinError as e:
+            log.warning("[%s] re-read item failed: %s", item.name, e)
+            return None
     if not fresh.media_source_id:
         return None
     subs = [s for s in fresh.subtitle_streams() if s.is_external]

@@ -209,3 +209,19 @@ def test_provider_works_with_userpass_only_no_api_key(monkeypatch):
     assert p.api_key  # fallback key present without env
     assert p._token == "tok123"
     assert any(u.endswith("/login") for u in calls)
+
+
+def test_config_autoloaded_from_xdg_default(tmp_path, monkeypatch):
+    import jsub.__main__ as m
+
+    xdg = tmp_path / "cfg"
+    (xdg / "jsub").mkdir(parents=True)
+    (xdg / "jsub" / "config.json").write_text(__import__("json").dumps(
+        {"url": "http://auto:8096", "api_key": "autokey"}))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    monkeypatch.delenv("JSUB_CONFIG", raising=False)
+    monkeypatch.delenv("JELLYFIN_URL", raising=False)
+    monkeypatch.delenv("JELLYFIN_API_KEY", raising=False)
+    args = m.build_parser().parse_args(["info"])
+    cfg = m.load_config(args)
+    assert cfg["url"] == "http://auto:8096" and cfg["api_key"] == "autokey"

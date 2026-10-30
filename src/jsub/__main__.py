@@ -22,11 +22,26 @@ from .verify import VerifyConfig, verify_item
 log = logging.getLogger("jsub")
 
 
+def default_config_paths() -> list[str]:
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return [
+        os.path.join(xdg, "jsub", "config.json"),
+        os.path.join(os.getcwd(), "jsub.json"),
+        os.path.join(os.getcwd(), "config.json"),
+    ]
+
+
 def load_config(args: argparse.Namespace) -> dict:
     cfg: dict = {}
     path = getattr(args, "config", None) or os.environ.get("JSUB_CONFIG")
+    if not path:
+        for cand in default_config_paths():
+            if os.path.exists(cand):
+                path = cand
+                break
     if path:
         cfg.update(json.loads(Path(path).read_text(encoding="utf-8")))
+        log.info("loaded config from %s", path)
     env_map = {
         "url": "JELLYFIN_URL",
         "api_key": "JELLYFIN_API_KEY",

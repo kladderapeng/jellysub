@@ -186,8 +186,10 @@ Env knobs for align: `JSUB_CANDIDATES` (default 5), `JSUB_WINDOWS` (3),
 Vosk models auto-download on first use), `FFMPEG_PATH` (otherwise PATH,
 `/usr/lib/jellyfin-ffmpeg/ffmpeg`, or the imageio-ffmpeg binary).
 
-Configuration can also come from a JSON file (`--config config.json` or
-`JSUB_CONFIG`, works before or after the subcommand) — this is the
+Configuration is read from the **first** of: `--config PATH` → `JSUB_CONFIG` →
+`$XDG_CONFIG_HOME/jsub/config.json` (default `~/.config/jsub/config.json`) →
+`./jsub.json` / `./config.json` in the current directory → env vars. So just
+placing `~/.config/jsub/config.json` is enough, no flags needed — this is the
 recommended way to keep secrets like passwords out of shell history:
 
 ```json

@@ -145,11 +145,15 @@ def _jellyfin_plugin_candidates(
     cands = []
     for lang in sorted(want):
         try:
-            cands.extend(client.search_remote_subtitles(item.id, lang))
+            found = client.search_remote_subtitles(item.id, lang)
+            log.info("plugin search lang=%s -> %d raw candidates", lang, len(found))
+            cands.extend(found)
         except JellyfinError as e:
             log.warning("remote search for %s failed: %s", lang, e)
     seen = set()
     cands = [c for c in cands if not (c.id in seen or seen.add(c.id))]
+    log.info("plugin search: %d candidates after dedupe, langs=%s",
+             len(cands), sorted({(c.language or "?") for c in cands}))
     cands = [
         c
         for c in cands
@@ -239,16 +243,19 @@ def _provider_candidates(
     if not files and media_path:
         terms = query_terms_from_path(media_path)
         parent_imdb = (item.provider_ids or {}).get("Imdb") if terms.get("season") else None
-        log.info("[%s] hash/imdb search empty, falling back to query %r (season=%s episode=%s)",
-                 item.name, terms["query"], terms.get("season"), terms.get("episode"))
+        log.info("[%s] hash/imdb search empty (hash=%s); query fallback: query=%r series=%r season=%s episode=%s parent_imdb=%s",
+                 item.name, moviehash, terms["query"], terms.get("series"), terms.get("season"),
+                 terms.get("episode"), parent_imdb)
         hits = provider.search_by_query(
             terms["query"], languages=lang2,
             season=terms.get("season"), episode=terms.get("episode"),
             parent_imdb_id=parent_imdb, moviehash=moviehash,
         )
+        log.info("[%s] query returned %d hits", item.name, len(hits))
         files = provider.best_files(hits, language, limit=limit)
         if not files:
             hits = provider.search_by_query(terms.get("series") or terms["query"], languages=lang2)
+            log.info("[%s] series-only query returned %d hits", item.name, len(hits))
             files = provider.best_files(hits, language, limit=limit)
     subs: list[tuple[SubFile, Subtitle]] = []
     for f in files:
@@ -276,6 +283,15 @@ def verify_item(
     runtime_s = (item.runtime_ms or 0) / 1000.0
     log.info("[%s] moviehash=%s runtime=%.0fs", item.name, moviehash, runtime_s)
 
+    from .media import query_terms_from_path
+
+    terms = query_terms_from_path(local_path)
+    log.info(
+        "[%s] parsed from path: query=%r series=%r season=%s episode=%s imdb=%s",
+        item.name, terms["query"], terms.get("series"), terms.get("season"),
+        terms.get("episode"), (item.provider_ids or {}).get("Imdb"),
+    )
+
     subs: list[tuple[SubFile, Subtitle]] = []
     source = "none"
     if provider is not None and getattr(provider, "api_key", ""):
@@ -290,13 +306,18 @@ def verify_item(
             source = "jellyfin-plugin" if subs else source
         except JellyfinError as e:
             log.warning("[%s] Jellyfin remote subtitle search failed: %s", item.name, e)
-            return VerifyResult(
-                item.id, item.name, "no-match", moviehash=moviehash,
-                detail=f"Jellyfin remote search unavailable ({e}); install the Open Subtitles plugin or set OPENSUBTITLES_API_KEY",
-            )
+    if not subs:
+        sidecar = _read_sidecar_for(client, item, cfg.language, cfg.media_root)
+        if sidecar is not None:
+            from .providers import SubFile as _SF
+
+            subs = [(_SF(file_id=0, file_name="sidecar", language=cfg.language, format="srt"),
+                     parse_srt(sidecar))]
+            source = "sidecar"
+            log.info("[%s] no remote candidates; using existing sidecar", item.name)
     if not subs:
         return VerifyResult(item.id, item.name, "no-match", moviehash=moviehash,
-                            detail="no candidates (need OPENSUBTITLES_API_KEY or the Open Subtitles plugin in Jellyfin)")
+                            detail="no candidates (set OPENSUBTITLES_API_KEY, enable the Open Subtitles plugin, or place a sidecar .srt next to the file)")
     log.info("[%s] %d candidate subtitle files via %s", item.name, len(subs), source)
 
     words = transcribe_media(local_path, runtime_s, cfg)

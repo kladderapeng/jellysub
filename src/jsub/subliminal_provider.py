@@ -82,9 +82,13 @@ def _provider_credentials(pname: str) -> dict:
         p = os.environ.get("OPENSUBTITLES_PASSWORD")
         if u and p:
             kw["username"], kw["password"] = u, p
+        else:
+            log.info("opensubtitlescom: no OPENSUBTITLES_USERNAME/PASSWORD -> query works, download will fail (login-gated)")
         key = os.environ.get("OPENSUBTITLESCOM_API_KEY") or os.environ.get("OPENSUBTITLES_API_KEY")
         if key:
             kw["apikey"] = key
+        else:
+            log.info("opensubtitlescom: no OPENSUBTITLES_API_KEY/OPENSUBTITLESCOM_API_KEY set")
         return kw
     if pname in ("opensubtitles", "opensubtitlesvip"):
         kw: dict = {}

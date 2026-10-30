@@ -195,8 +195,13 @@ def _query_provider(pname: str, video_path: str, languages: list[str]):
     if pname in ("opensubtitlescom", "opensubtitlescomvip"):
         p = cls(**kwargs)
         p.initialize()
-        if not getattr(p, "session", None) or not getattr(p, "token", None):
-            log.info("opensubtitlescom needs OPENSUBTITLES_USERNAME/OPENSUBTITLES_PASSWORD (or vip token) to download; query-only without login")
+        if kwargs.get("username") and kwargs.get("password"):
+            try:
+                p.login()
+            except Exception as e:
+                log.warning("opensubtitlescom login failed: %s (download will be rejected; search still works)", e)
+        elif not kwargs.get("username"):
+            log.info("opensubtitlescom: no OPENSUBTITLES_USERNAME/PASSWORD -> query-only, /download will 401/429")
         return p.query(langs, **_episode_kwargs(v, kwargs, video_path))
     if pname == "addic7ed":
         if not is_episode:
@@ -299,7 +304,7 @@ def subliminal_candidates(
         ) from e
 
     _fix_dogpile_cache()
-    chosen = providers or ["podnapisi", "opensubtitles", "opensubtitlescom", "addic7ed", "tvsubtitles", "subtitulamos"]
+    chosen = providers or ["opensubtitlescom", "podnapisi", "opensubtitles", "addic7ed", "subtitulamos"]
     out: list[SubCandidate] = []
     for pname in chosen:
         try:
@@ -318,6 +323,11 @@ def subliminal_candidates(
                 )
         except Exception as e:
             log.warning("subliminal provider %s failed: %s", pname, e)
+            if "429" in str(e) or "Too Many" in str(e):
+                import time
+
+                log.info("rate limited on %s; sleeping 20s before next provider", pname)
+                time.sleep(20)
         if len(out) >= limit:
             break
     out.sort(key=lambda c: c.score, reverse=True)
@@ -341,9 +351,15 @@ def subliminal_download(candidate: SubCandidate, video_path: str) -> bytes:
         if getattr(v, "season", None) is not None:
             kw.update(season=v.season, episode=getattr(v, "episode", None))
         subs = provider.query(lang, getattr(v, "title", v.name), **kw)
-    elif pname in ("opensubtitles", "opensubtitlesvip", "opensubtitlescom", "opensubtitlescomvip"):
-        found = _query_provider(pname, video_path, [candidate.language])
-        subs = found
+    elif pname in ("opensubtitlescom", "opensubtitlescomvip"):
+        provider = cls(**kwargs)
+        provider.initialize()
+        if kwargs.get("username") and kwargs.get("password"):
+            provider.login()
+        subs = provider.query(set(_langs([candidate.language])),
+                              **{k: x for k, x in _episode_kwargs(v, kwargs, video_path).items() if x is not None})
+    elif pname in ("opensubtitles", "opensubtitlesvip"):
+        subs = _query_provider(pname, video_path, [candidate.language])
     else:
         subs = _query_provider(pname, video_path, [candidate.language])
 

@@ -106,6 +106,11 @@ and `ADDIC7ED_USERNAME`/`ADDIC7ED_PASSWORD` from the environment.
 Candidate order: opensubtitles.com API (if key) → Jellyfin plugin →
 subliminal providers → existing sidecar file.
 
+Every successfully downloaded subtitle is **cached immediately** in
+`JSUB_CACHE_DIR` (default `~/.cache/jsub/subs`, with an `index.json` keyed by
+moviehash+language), so a later ASR/align failure never loses the download —
+rerun later and the cache is reused.
+
 Vosk ASR models (~40 MB each, per language) are data, not packages — they
 auto-download on first use into `JSUB_MODEL_DIR` (default `~/.cache/jsub/models`).
 

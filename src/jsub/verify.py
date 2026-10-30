@@ -347,10 +347,14 @@ def _provider_candidates(
             hits = provider.search_by_query(terms.get("series") or terms["query"], languages=lang2)
             log.info("[%s] series-only query returned %d hits", item.name, len(hits))
             files = provider.best_files(hits, language, limit=limit)
+    from .cache import store as cache_store
+
     subs: list[tuple[SubFile, Subtitle]] = []
     for f in files:
         try:
-            subs.append((f, parse_srt(decode_subtitle(provider.download(f.file_id)))))
+            raw = provider.download(f.file_id)
+            cache_store("opensubtitles-api", f.file_name or str(f.file_id), f.language or language, raw, moviehash)
+            subs.append((f, parse_srt(decode_subtitle(raw))))
         except Exception as e:
             log.warning("[%s] candidate %s failed: %s", item.name, f.file_id, e)
     return subs
@@ -402,9 +406,12 @@ def verify_item(
 
             cands = subliminal_candidates(local_path, [cfg.language], limit=cfg.candidates, providers=cfg.providers)
             log.info("[%s] subliminal -> %d candidates", item.name, len(cands))
+            from .cache import store as cache_store
+
             for c in cands:
                 try:
                     raw = subliminal_download(c, local_path)
+                    cache_store("subliminal:" + c.provider, c.name, c.language, raw, moviehash)
                     subs.append((SubFile(file_id=0, file_name=c.name, language=c.language,
                                          format=c.format, download_count=0, rating=c.score),
                                  parse_srt(decode_subtitle(raw))))
@@ -430,7 +437,19 @@ def verify_item(
                             detail="no candidates (set OPENSUBTITLES_API_KEY, enable the Open Subtitles plugin, or place a sidecar .srt next to the file)")
     log.info("[%s] %d candidate subtitle files via %s", item.name, len(subs), source)
 
-    words = transcribe_media(local_path, runtime_s, cfg)
+    try:
+        words = transcribe_media(local_path, runtime_s, cfg)
+    except ImportError as e:
+        return VerifyResult(
+            item.id, item.name, "error", moviehash=moviehash,
+            detail=f"ASR unavailable: {e} — install with: pip install 'jsub[align]' "
+                   f"(or apt/pacman python3-vosk); without it, align can't verify timing",
+        )
+    except RuntimeError as e:
+        return VerifyResult(
+            item.id, item.name, "error", moviehash=moviehash,
+            detail=f"ASR failed: {e} (ffmpeg missing? set FFMPEG_PATH; model download blocked?)",
+        )
     log.info("[%s] ASR produced %d words", item.name, len(words))
     if not words:
         return VerifyResult(item.id, item.name, "error", moviehash=moviehash, detail="ASR produced no words")

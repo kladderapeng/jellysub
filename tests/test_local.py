@@ -268,3 +268,27 @@ def test_providers_flag_threads_to_subliminal(tmp_path, monkeypatch):
     args = m.build_parser().parse_args(["--providers", "podnapisi,subtitulamos", "local", str(tmp_path / "x.mkv")])
     cfg = m.load_config(args)
     assert cfg["providers"] == ["podnapisi", "subtitulamos"]
+
+
+def test_downloads_are_cached_even_if_align_fails(tmp_path, monkeypatch):
+    import jsub.cache as cache_mod
+    import jsub.local as lm
+
+    cdir = tmp_path / "cache"
+    monkeypatch.setenv("JSUB_CACHE_DIR", str(cdir))
+    import jsub.subliminal_provider as sp
+    monkeypatch.setattr(sp, "subliminal_candidates", lambda *a, **k: [sp.SubCandidate("podnapisi", "1", "x.srt", "en", "srt", 1.0)])
+    monkeypatch.setattr(sp, "subliminal_download", lambda c, p: SRT.encode())
+
+    m = tmp_path / "Movie.mp4"
+    m.write_bytes(b"\0" * 200_000)
+
+    def boom(*a, **k):
+        raise ImportError("No module named 'vosk'")
+    monkeypatch.setattr(lm, "transcribe_media", boom)
+    monkeypatch.setattr(lm, "_probe_runtime_s", lambda *a, **k: 100.0)
+    res = lm.align_local_file(str(m), "eng", VerifyConfig(language="eng"), provider=None)
+    assert res.action == "error"
+    cached = list(cdir.glob("*.srt"))
+    assert cached, "download should be cached even though align failed"
+    assert cached[0].read_bytes() == SRT.encode()

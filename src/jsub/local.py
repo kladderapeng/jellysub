@@ -109,7 +109,10 @@ def align_local_file(
             api_subs = []
             for f in files:
                 try:
-                    api_subs.append((f, parse_srt(decode_subtitle(provider.download(f.file_id)))))
+                    raw = provider.download(f.file_id)
+                    from .cache import store as cache_store
+                    cache_store("opensubtitles-api", f.file_name or str(f.file_id), f.language or language, raw, moviehash)
+                    api_subs.append((f, parse_srt(decode_subtitle(raw))))
                 except Exception as e:
                     log.warning("candidate %s failed: %s", f.file_id, e)
             if api_subs:
@@ -123,9 +126,12 @@ def align_local_file(
 
             cands = subliminal_candidates(media_path, [language], limit=vcfg.candidates, providers=vcfg.providers)
             log.info("[%s] subliminal -> %d candidates", os.path.basename(media_path), len(cands))
+            from .cache import store as cache_store
+
             for c in cands:
                 try:
                     raw = subliminal_download(c, media_path)
+                    cache_store("subliminal:" + c.provider, c.name, c.language, raw, moviehash)
                     subs.append((SubFile(file_id=0, file_name=c.name, language=c.language,
                                          format=c.format, download_count=0, rating=c.score),
                                  parse_srt(decode_subtitle(raw))))
@@ -141,7 +147,16 @@ def align_local_file(
         return LocalResult(media_path, "no-match", detail="no candidate subtitles (set OPENSUBTITLES_API_KEY, install subliminal, or place a sidecar .srt next to the file)")
     log.info("[%s] %d candidate subtitle(s) via %s", os.path.basename(media_path), len(subs), source)
 
-    words = transcribe_media(media_path, runtime_s, vcfg)
+    try:
+        words = transcribe_media(media_path, runtime_s, vcfg)
+    except ImportError as e:
+        return LocalResult(
+            media_path, "error",
+            detail=f"ASR unavailable: {e} — install with: pip install 'jsub[align]' (or apt/pacman python3-vosk); "
+                   f"downloaded subtitles are kept in the cache dir",
+        )
+    except RuntimeError as e:
+        return LocalResult(media_path, "error", detail=f"ASR failed: {e} (ffmpeg missing? set FFMPEG_PATH)")
     if not words:
         return LocalResult(media_path, "error", detail="ASR produced no words")
     log.info("[%s] ASR produced %d words", os.path.basename(media_path), len(words))

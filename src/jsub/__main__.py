@@ -192,7 +192,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "info":
         info = client.server_info()
-        print(json.dumps(info, indent=2))
+        try:
+            plugins = client.plugins()
+        except JellyfinError as e:
+            plugins = [{"error": str(e)}]
+        out = {"server": info, "plugins": [
+            {"Name": p.get("Name"), "Version": p.get("Version"),
+             "Status": p.get("Status"), "Id": p.get("Id")}
+            for p in plugins
+        ]}
+        print(json.dumps(out, indent=2))
         return 0
 
     if args.command == "scan":

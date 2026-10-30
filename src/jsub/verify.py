@@ -157,9 +157,10 @@ def _jellyfin_plugin_candidates(
     cands = [
         c
         for c in cands
-        if (c.language or "").lower() in want
+        if (not c.language or c.language.lower() in want)
         and (c.format or "srt").lower() in ("srt", "ass", "ssa", "vtt")
     ]
+    log.info("plugin search: %d candidates after language/format filter", len(cands))
     cands.sort(
         key=lambda c: (
             float(c.score or 0) + min(c.download_count or 0, 10000) / 100.0

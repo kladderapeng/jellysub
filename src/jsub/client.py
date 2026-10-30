@@ -126,10 +126,16 @@ class RemoteSubtitle:
 
     @classmethod
     def from_dict(cls, d: dict) -> "RemoteSubtitle":
+        lang = (
+            d.get("Language")
+            or d.get("LanguageCode")
+            or d.get("ThreeLetterISOLanguageName")
+            or ""
+        )
         return cls(
             id=str(d.get("Id", "")),
             name=str(d.get("Name", "")),
-            language=str(d.get("Language", "")),
+            language=str(lang),
             format=str(d.get("Format", "")).lower(),
             provider_name=str(d.get("ProviderName", "")),
             score=d.get("Score"),
@@ -189,6 +195,9 @@ class JellyfinClient:
 
     def server_info(self) -> dict:
         return self._get_json("/System/Info/Public")
+
+    def plugins(self) -> list[dict]:
+        return self._get_json("/Plugins") or []
 
     def libraries(self, media_only: bool = True) -> list[dict]:
         folders = self._get_json("/Library/VirtualFolders") or []

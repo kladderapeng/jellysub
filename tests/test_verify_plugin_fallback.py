@@ -387,3 +387,38 @@ def test_get_item_users_route_fallback(tmp_path):
     item = c.get_item(ITEM_ID, user_id=c.current_user_id())
     assert item.id == ITEM_ID and item.media_source_id == "s"
     httpd.shutdown()
+
+
+def test_user_id_fallback_via_users_list_and_listing_route(tmp_path):
+    """/Users/Me 403s (some API keys), /Users works, /Items/{id} 400s, /Items?Ids= works."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading, json as _json
+    from urllib.parse import urlparse as _up
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def _j(self, obj, status=200):
+            b = _json.dumps(obj).encode()
+            self.send_response(status); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+        def do_GET(self):
+            u = _up(self.path)
+            if u.path == "/Users/Me":
+                return self._j({"error": "forbidden"}, 403)
+            if u.path == "/Users":
+                return self._j([{"Id": "u-admin", "Name": "kladderapeng", "Policy": {"IsAdministrator": True}}])
+            if u.path == f"/Items/{ITEM_ID}":
+                return self._j({"error": "Error processing request"}, 400)
+            if u.path == "/Items":
+                return self._j({"Items": [{"Id": ITEM_ID, "Name": "Movie", "Type": "Movie", "Path": "/x.mkv",
+                                           "RunTimeTicks": 100, "MediaSources": [{"Id": "s"}],
+                                           "MediaStreams": [{"Index": 0, "Type": "Video"}]}], "TotalRecordCount": 1})
+            return self._j({}, 404)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    c = JellyfinClient(f"http://127.0.0.1:{httpd.server_port}", "k")
+    uid = c.current_user_id()
+    assert uid == "u-admin"
+    item = c.get_item(ITEM_ID, user_id=uid)
+    assert item.id == ITEM_ID and item.media_source_id == "s"
+    httpd.shutdown()

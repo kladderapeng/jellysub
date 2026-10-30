@@ -329,6 +329,7 @@ class JellyfinClient:
             (f"/Users/{user_id}/Items/{item_id}", {"Fields": fields}) if user_id else None,
             (f"/Items/{item_id}", {"Fields": fields, "UserId": user_id} if user_id else {"Fields": fields}),
             (f"/Items/{item_id}", {"Fields": fields}),
+            (f"/Items", {"Ids": item_id, "Fields": fields, "UserId": user_id} if user_id else {"Ids": item_id, "Fields": fields}),
         ]
         last_err: JellyfinError | None = None
         for entry in routes:
@@ -337,8 +338,14 @@ class JellyfinClient:
             route, params = entry
             try:
                 data = self._get_json(route, params=params)
+                items = data.get("Items") if isinstance(data, dict) and "Items" in data else data
+                if isinstance(items, list):
+                    if not items:
+                        raise JellyfinError(f"empty result via {route}", status=404)
+                    _log.info("get_item %s OK via %s (listing)", item_id, route)
+                    return Item.from_dict(items[0])
                 _log.info("get_item %s OK via %s", item_id, route)
-                return Item.from_dict(data or {})
+                return Item.from_dict(items or {})
             except JellyfinError as e:
                 _log.info("get_item %s via %s -> HTTP %s", item_id, route, e.status)
                 last_err = e
@@ -347,11 +354,22 @@ class JellyfinClient:
         raise last_err if last_err else JellyfinError(f"GET item {item_id} failed")
 
     def current_user_id(self) -> str | None:
+        if getattr(self, "_user_id", None):
+            return self._user_id
         try:
             data = self._get_json("/Users/Me")
-            return str(data.get("Id")) if data else None
+            uid = str(data.get("Id")) if data else None
         except JellyfinError:
-            return None
+            uid = None
+        if not uid:
+            try:
+                users = self._get_json("/Users") or []
+                admins = [u for u in users if u.get("Policy", {}).get("IsAdministrator")]
+                uid = str((admins or users)[0].get("Id")) if (admins or users) else None
+            except JellyfinError:
+                uid = None
+        self._user_id = uid
+        return uid
 
     def search_remote_subtitles(
         self, item_id: str, language: str | None = None

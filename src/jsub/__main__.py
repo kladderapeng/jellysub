@@ -41,6 +41,7 @@ def load_config(args: argparse.Namespace) -> dict:
         "model_dir": "JSUB_MODEL_DIR",
         "ffmpeg": "FFMPEG_PATH",
         "media_root": "JSUB_MEDIA_ROOT",
+        "user_id": "JSUB_USER_ID",
     }
     for key, env in env_map.items():
         if os.environ.get(env):
@@ -63,6 +64,8 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["media_root"] = args.media_root
     if getattr(args, "sub", None):
         cfg["sub"] = args.sub
+    if getattr(args, "user_id", None):
+        cfg["user_id"] = args.user_id
     return cfg
 
 
@@ -111,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--path", help="limit to a local media directory (all files in it) or a single file, matched against item paths, e.g. /data/series/Friends/Season 01")
     common.add_argument("--media-root", help="local mount point corresponding to Jellyfin's media root, e.g. /mnt when Jellyfin sees /media/... (used by align to read files)")
     common.add_argument("--sub", help="explicit subtitle file to align (local mode), no provider/API key needed")
+    common.add_argument("--user-id", help="Jellyfin user id to pass as UserId (default: resolved via /Users/Me, then /Users admin list)")
     common.add_argument("--dry-run", action="store_true", help="do not modify anything")
     common.add_argument("--verbose", "-v", action="store_true")
     parser = argparse.ArgumentParser(
@@ -189,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     cfg = load_config(args)
     client = build_client(cfg) if args.command != "local" else None
+    if client is not None and cfg.get("user_id"):
+        client._user_id = cfg["user_id"]
 
     if args.command == "info":
         info = client.server_info()

@@ -155,3 +155,21 @@ def test_subliminal_candidate_source_used_when_no_others(tmp_path, monkeypatch):
     res = align_local_file(str(m), "eng", VerifyConfig(language="eng"), provider=None)
     assert res.action == "aligned"
     assert res.chosen == "Mum.S01E01.srt"
+
+
+def test_config_file_supplies_opensubtitles_credentials(tmp_path, monkeypatch):
+    import jsub.__main__ as m
+
+    cfg_file = tmp_path / "jsub.json"
+    cfg_file.write_text(__import__("json").dumps({
+        "url": "http://x", "api_key": "k",
+        "os_api_key": "KEY123", "os_username": "u@x", "os_password": "p@$$w0rd#!",
+    }))
+    monkeypatch.delenv("OPENSUBTITLES_API_KEY", raising=False)
+    monkeypatch.delenv("OPENSUBTITLES_USERNAME", raising=False)
+    monkeypatch.delenv("OPENSUBTITLES_PASSWORD", raising=False)
+    args = m.build_parser().parse_args(["--config", str(cfg_file), "info"])
+    cfg = m.load_config(args)
+    assert cfg["os_password"] == "p@$$w0rd#!"
+    assert __import__("os").environ["OPENSUBTITLES_PASSWORD"] == "p@$$w0rd#!"
+    assert __import__("os").environ["OPENSUBTITLES_API_KEY"] == "KEY123"

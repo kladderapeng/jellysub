@@ -187,19 +187,27 @@ Vosk models auto-download on first use), `FFMPEG_PATH` (otherwise PATH,
 `/usr/lib/jellyfin-ffmpeg/ffmpeg`, or the imageio-ffmpeg binary).
 
 Configuration can also come from a JSON file (`--config config.json` or
-`JSUB_CONFIG`):
+`JSUB_CONFIG`, works before or after the subcommand) — this is the
+recommended way to keep secrets like passwords out of shell history:
 
 ```json
 {
   "url": "http://localhost:8096",
-  "api_key": "...",
+  "api_key": "jellyfin-api-key",
   "languages": "eng,deu",
   "offset_ms": 250,
   "libraries": "optional,comma,separated,ids",
   "min_score": 0.0,
-  "dry_run": false
+  "dry_run": false,
+  "os_api_key": "opensubtitles-app-key",
+  "os_username": "opensubtitles-account@example.com",
+  "os_password": "any chars here, no shell quoting needed"
 }
 ```
+
+`os_api_key`/`os_username`/`os_password` map to `OPENSUBTITLES_API_KEY` /
+`OPENSUBTITLES_USERNAME` / `OPENSUBTITLES_PASSWORD` (env still wins if both
+are set). Protect the file: `chmod 600 ~/.config/jsub/config.json`.
 
 Languages accept ISO 639-1 (`en`) or 639-2/3 (`eng`); matching is tolerant of
 either spelling.

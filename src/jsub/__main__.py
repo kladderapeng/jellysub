@@ -24,7 +24,7 @@ log = logging.getLogger("jsub")
 
 def load_config(args: argparse.Namespace) -> dict:
     cfg: dict = {}
-    path = args.config or os.environ.get("JSUB_CONFIG")
+    path = getattr(args, "config", None) or os.environ.get("JSUB_CONFIG")
     if path:
         cfg.update(json.loads(Path(path).read_text(encoding="utf-8")))
     env_map = {
@@ -42,6 +42,9 @@ def load_config(args: argparse.Namespace) -> dict:
         "ffmpeg": "FFMPEG_PATH",
         "media_root": "JSUB_MEDIA_ROOT",
         "user_id": "JSUB_USER_ID",
+        "os_api_key": "OPENSUBTITLES_API_KEY",
+        "os_username": "OPENSUBTITLES_USERNAME",
+        "os_password": "OPENSUBTITLES_PASSWORD",
     }
     for key, env in env_map.items():
         if os.environ.get(env):
@@ -66,6 +69,12 @@ def load_config(args: argparse.Namespace) -> dict:
         cfg["sub"] = args.sub
     if getattr(args, "user_id", None):
         cfg["user_id"] = args.user_id
+    for key in ("os_api_key", "os_username", "os_password"):
+        val = cfg.get(key)
+        if val:
+            os.environ[{"os_api_key": "OPENSUBTITLES_API_KEY",
+                        "os_username": "OPENSUBTITLES_USERNAME",
+                        "os_password": "OPENSUBTITLES_PASSWORD"}[key]] = str(val)
     return cfg
 
 
@@ -105,7 +114,8 @@ def build_pipeline_config(cfg: dict, args: argparse.Namespace) -> PipelineConfig
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", help="path to JSON config file")
+    common.add_argument("--config", default=argparse.SUPPRESS,
+                        help="path to JSON config file (keys: url, api_key, languages, os_api_key, os_username, os_password, ...)")
     common.add_argument("--url", help="Jellyfin base URL, e.g. http://localhost:8096")
     common.add_argument("--api-key", help="Jellyfin API key")
     common.add_argument("--languages", help="comma separated subtitle languages")
@@ -121,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="jsub", description="Automate Jellyfin subtitle fetching and fitting.",
         parents=[common],
     )
+
     sub = parser.add_subparsers(dest="command", required=True)
     local_sub = None
     for name, help_text in [
@@ -159,6 +170,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if argv is None:
         argv = sys.argv[1:]
+    if getattr(args, "config", None) is None:
+        for i, a in enumerate(argv):
+            if a == "--config" and i + 1 < len(argv):
+                args.config = argv[i + 1]
+                break
+            if a.startswith("--config="):
+                args.config = a.split("=", 1)[1]
+                break
     sub_pos = next((i for i, a in enumerate(argv) if a in
                     ("info", "scan", "fetch", "fit", "run", "align")), None)
     if sub_pos is not None:

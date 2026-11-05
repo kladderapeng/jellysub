@@ -198,10 +198,18 @@ def build_parser() -> argparse.ArgumentParser:
         ("run", "fetch and fit in one pass"),
         ("align", "verify+align subtitles against the media audio (runs on the server)"),
         ("local", "align a subtitle for a local media file directly (no Jellyfin); writes <name>.<lang>.srt next to the file"),
+        ("rate", "rate the subtitle quality of a media file (bad|poor|ok|good|great or 1-5); bad ratings are excluded on reruns"),
+        ("state", "show the .jsub-state.json entries for a directory tree"),
     ]:
         sp = sub.add_parser(name, parents=[common], help=help_text)
         if name == "local":
             sp.add_argument("file", nargs="?", help="media file path to align")
+        if name == "rate":
+            sp.add_argument("file", help="media file path")
+            sp.add_argument("rating", help="bad|poor|ok|good|great or 1-5")
+            sp.add_argument("--lang", default=None, help="limit to this language (default: all)")
+        if name == "state":
+            sp.add_argument("dir", nargs="?", default=".", help="directory to inspect")
     return parser
 
 
@@ -298,6 +306,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(missing)}/{len(items)} items missing subtitles")
         for it in missing:
             print(f"  - {it.type}  {it.name}  [{it.id}]  {it.path or ''}")
+        return 0
+
+    if args.command in ("rate", "state"):
+        from .state import StateStore, find_state_root
+
+        if args.command == "rate":
+            store = StateStore(find_state_root(args.file))
+            n = store.set_rating(args.file, args.rating, args.lang)
+            print(json.dumps({"rated": n, "rating": args.rating, "file": args.file}, indent=2))
+            return 0 if n else 1
+        root = find_state_root(args.dir)
+        store = StateStore(root)
+        out = {"root": root, "state_file": store.path, "files": {}}
+        for rel, e in sorted(store.entries.items()):
+            out["files"][rel] = {
+                "size": e.size,
+                "subtitles": [s.to_dict() for s in e.subtitles],
+            }
+        print(json.dumps(out, indent=2))
         return 0
 
     if args.command == "align":

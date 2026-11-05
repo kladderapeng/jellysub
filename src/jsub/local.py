@@ -76,6 +76,22 @@ def align_local_file(
     vcfg.language = language
     if not os.path.exists(media_path):
         return LocalResult(media_path, "error", detail=f"no such file: {media_path}")
+
+    from .state import StateStore, find_state_root
+
+    store = StateStore(find_state_root(media_path))
+    if not store.media_changed(media_path):
+        good = store.has_good_sub(media_path, language)
+        if good is not None:
+            log.info("[%s] already has a good %s subtitle (%s, rated %s) — skipping",
+                     os.path.basename(media_path), language, good.file, good.rating or "unrated")
+            return LocalResult(media_path, "cached", out_path=good.file, chosen=good.source,
+                               detail="state file has a non-bad subtitle for this file+language")
+    exclude_ids = store.bad_provider_ids(media_path, language)
+    if exclude_ids:
+        log.info("[%s] excluding previously bad-rated subtitle ids: %s",
+                 os.path.basename(media_path), sorted(exclude_ids))
+
     moviehash = opensubtitles_hash(media_path)
     runtime_s = _probe_runtime_s(media_path, vcfg)
     log.info("[%s] moviehash=%s runtime=%.0fs", os.path.basename(media_path), moviehash, runtime_s)
@@ -107,6 +123,7 @@ def align_local_file(
                 )
                 files = provider.best_files(hits, language, limit=vcfg.candidates)
             api_subs = []
+            files = [f for f in files if str(f.file_id) not in exclude_ids]
             for f in files:
                 try:
                     raw = provider.download(f.file_id)
@@ -125,6 +142,8 @@ def align_local_file(
             from .subliminal_provider import subliminal_candidates, subliminal_download
 
             cands = subliminal_candidates(media_path, [language], limit=vcfg.candidates, providers=vcfg.providers)
+            if exclude_ids:
+                cands = [c for c in cands if c.subtitle_id not in exclude_ids]
             log.info("[%s] subliminal -> %d candidates", os.path.basename(media_path), len(cands))
             from .cache import store as cache_store
 
@@ -132,7 +151,8 @@ def align_local_file(
                 try:
                     raw = subliminal_download(c, media_path)
                     cache_store("subliminal:" + c.provider, c.name, c.language, raw, moviehash)
-                    subs.append((SubFile(file_id=0, file_name=c.name, language=c.language,
+                    subs.append((SubFile(file_id=int(c.subtitle_id) if str(c.subtitle_id).isdigit() else 0,
+                                         file_name=c.name, language=c.language,
                                          format=c.format, download_count=0, rating=c.score),
                                  parse_srt(decode_subtitle(raw))))
                 except Exception as e:
@@ -182,6 +202,19 @@ def align_local_file(
                            speed=al.speed, offset_s=al.offset_s, rms_s=al.rms_s, anchors=len(al.anchors))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(corrected)
+    from .state import SubEntry
+
+    # map back to the original candidate id when the source was subliminal
+    pid = str(getattr(best.file, "file_id", "") or "")
+    if source == "subliminal" and pid and pid != "0":
+        pid = pid  # file_id carries the subliminal subtitle id
+    store.record(media_path, SubEntry(
+        file=os.path.abspath(out_path), source=source,
+        provider_id=pid or str(best.file.file_name),
+        language=language, speed=al.speed, offset_s=al.offset_s,
+        rms_s=al.rms_s, anchors=len(al.anchors),
+    ))
+    store.save()
     return LocalResult(media_path, "aligned", out_path=out_path, chosen=best.file.file_name,
                        speed=al.speed, offset_s=al.offset_s, rms_s=al.rms_s, anchors=len(al.anchors))
 

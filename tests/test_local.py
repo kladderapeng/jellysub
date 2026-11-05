@@ -292,3 +292,52 @@ def test_downloads_are_cached_even_if_align_fails(tmp_path, monkeypatch):
     cached = list(cdir.glob("*.srt"))
     assert cached, "download should be cached even though align failed"
     assert cached[0].read_bytes() == SRT.encode()
+
+
+def test_state_file_skips_rerun_and_bad_rating_triggers_refetch(tmp_path, monkeypatch):
+    import jsub.local as lm
+    import jsub.subliminal_provider as sp
+    from jsub.state import StateStore, SubEntry
+
+    m = tmp_path / "Movie.mp4"
+    m.write_bytes(b"\0" * 100_000)
+    cdir = tmp_path / "cache"
+    monkeypatch.setenv("JSUB_CACHE_DIR", str(cdir))
+    monkeypatch.setattr(sp, "subliminal_candidates", lambda *a, **k: [sp.SubCandidate("podnapisi", "1", "x.srt", "en", "srt", 1.0)])
+    monkeypatch.setattr(sp, "subliminal_download", lambda c, p: SRT.encode())
+    from jsub.asr import Word
+    monkeypatch.setattr(lm, "transcribe_media", lambda *a, **k: [
+        Word(10.0, 14.0, "we are going to test this thing right now"),
+        Word(40.0, 44.0, "another line of speech for the second cue"),
+        Word(70.0, 74.0, "a third distinct passage spoken aloud"),
+        Word(100.0, 104.0, "and a fourth one for more anchors"),
+    ])
+    vcfg = VerifyConfig(language="eng")
+
+    r1 = lm.align_local_file(str(m), "eng", vcfg, provider=None)
+    assert r1.action == "aligned"
+    assert (tmp_path / ".jsub-state.json").exists()
+
+    # rerun: should skip via state
+    calls = {"n": 0}
+    orig = sp.subliminal_candidates
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+    monkeypatch.setattr(sp, "subliminal_candidates", counting)
+    r2 = lm.align_local_file(str(m), "eng", vcfg, provider=None)
+    assert r2.action == "cached" and calls["n"] == 0
+
+    # mark bad -> rerun must re-fetch and exclude the bad id
+    store = StateStore(str(tmp_path))
+    assert store.set_rating(str(m), "bad") == 1
+    seen_ids = []
+    def recording(path, langs, limit=10, providers=None):
+        return [sp.SubCandidate("podnapisi", "1", "x.srt", "en", "srt", 1.0),
+                sp.SubCandidate("podnapisi", "2", "y.srt", "en", "srt", 0.9)]
+    monkeypatch.setattr(sp, "subliminal_candidates", recording)
+    monkeypatch.setattr(sp, "subliminal_download", lambda c, p: (seen_ids.append(c.subtitle_id), SRT.encode())[1])
+    (tmp_path / "Movie.en.srt").unlink(missing_ok=True)  # force remote path
+    r3 = lm.align_local_file(str(m), "eng", vcfg, provider=None)
+    assert r3.action == "aligned"
+    assert "1" not in seen_ids and "2" in seen_ids

@@ -111,6 +111,20 @@ Every successfully downloaded subtitle is **cached immediately** in
 moviehash+language), so a later ASR/align failure never loses the download —
 rerun later and the cache is reused.
 
+**Reruns are state-aware**: each scanned directory tree gets a
+`.jsub-state.json` (written next to the media) listing every media file with
+its subtitles — source, provider id, fetch date, align stats (speed/offset/
+rms/anchors) and a quality rating. Reruns skip files that already have a
+non-bad subtitle for the language (as long as the media file is unchanged),
+so directory scans don't redo work. If a fetched subtitle is bad, rate it and
+the next run re-fetches while excluding the bad provider ids:
+
+```bash
+jsub rate '/media/series/Mum/Season 01/Mum S01E01.mp4' bad     # or poor|ok|good|great, 1-5
+jsub rate '.../Mum S01E01.mp4' bad --lang en
+jsub state /media/series          # dump the state file as JSON
+```
+
 Vosk ASR models (~40 MB each, per language) are data, not packages — they
 auto-download on first use into `JSUB_MODEL_DIR` (default `~/.cache/jsub/models`).
 

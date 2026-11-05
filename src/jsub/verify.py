@@ -377,6 +377,18 @@ def verify_item(
     runtime_s = (item.runtime_ms or 0) / 1000.0
     log.info("[%s] moviehash=%s runtime=%.0fs", item.name, moviehash, runtime_s)
 
+    from .state import StateStore, find_state_root
+
+    store = StateStore(find_state_root(local_path))
+    if not store.media_changed(local_path):
+        good = store.has_good_sub(local_path, cfg.language)
+        if good is not None:
+            log.info("[%s] already has a good %s subtitle (%s) — skipping",
+                     item.name, cfg.language, good.file)
+            return VerifyResult(item.id, item.name, "cached", moviehash=moviehash,
+                                chosen=good.source, detail=good.file)
+    exclude_ids = store.bad_provider_ids(local_path, cfg.language)
+
     from .media import query_terms_from_path
 
     terms = query_terms_from_path(local_path)
@@ -391,6 +403,8 @@ def verify_item(
     if provider is not None and getattr(provider, "api_key", ""):
         try:
             subs = _provider_candidates(provider, item, moviehash, cfg.language, cfg.candidates, local_path)
+            if exclude_ids:
+                subs = [x for x in subs if str(x[0].file_id) not in exclude_ids]
             source = "opensubtitles-api"
         except ProviderError as e:
             log.warning("[%s] opensubtitles API failed (%s), falling back to Jellyfin plugin search", item.name, e)
@@ -405,6 +419,8 @@ def verify_item(
             from .subliminal_provider import subliminal_candidates, subliminal_download
 
             cands = subliminal_candidates(local_path, [cfg.language], limit=cfg.candidates, providers=cfg.providers)
+            if exclude_ids:
+                cands = [c for c in cands if c.subtitle_id not in exclude_ids]
             log.info("[%s] subliminal -> %d candidates", item.name, len(cands))
             from .cache import store as cache_store
 
@@ -489,6 +505,19 @@ def verify_item(
         with open(sidecar, "w", encoding="utf-8") as f:
             f.write(srt_out)
         log.info("[%s] wrote sidecar %s", item.name, sidecar)
+    from .state import SubEntry
+
+    out_file = os.path.join(
+        os.path.dirname(local_path),
+        f"{os.path.splitext(os.path.basename(local_path))[0]}.{lang2}.srt",
+    )
+    store.record(local_path, SubEntry(
+        file=os.path.abspath(out_file), source=source,
+        provider_id=str(getattr(best.file, "file_id", "") or "") or best.file.file_name,
+        language=cfg.language, speed=al.speed, offset_s=al.offset_s,
+        rms_s=al.rms_s, anchors=len(al.anchors),
+    ))
+    store.save()
     try:
         client.refresh_item(item.id)
     except JellyfinError as e:

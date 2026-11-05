@@ -477,7 +477,18 @@ def verify_item(
         result.action = "would-align"
         return result
     lang3 = cfg.language
-    client.upload_subtitle(item.id, srt_out.encode("utf-8"), language=lang3, format="srt")
+    lang2 = cfg.language[:2]
+    try:
+        client.upload_subtitle(item.id, srt_out.encode("utf-8"), language=lang3, format="srt")
+    except JellyfinError as e:
+        log.warning("[%s] API upload failed (%s); writing sidecar next to media instead", item.name, e)
+        sidecar = os.path.join(
+            os.path.dirname(local_path),
+            f"{os.path.splitext(os.path.basename(local_path))[0]}.{lang2}.srt",
+        )
+        with open(sidecar, "w", encoding="utf-8") as f:
+            f.write(srt_out)
+        log.info("[%s] wrote sidecar %s", item.name, sidecar)
     try:
         client.refresh_item(item.id)
     except JellyfinError as e:

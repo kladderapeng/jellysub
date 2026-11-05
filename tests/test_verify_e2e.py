@@ -11,6 +11,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import jsub.verify as verify_mod
+from jsub.providers import SubFile
+from jsub.srt import parse_srt
+SRT = "1\n00:00:00,000 --> 00:00:01,000\nhello\n\n2\n00:00:02,000 --> 00:00:03,000\nworld\n"
+from jsub.asr import Word
 from jsub.asr import Word
 from jsub.client import Item, JellyfinClient
 from jsub.srt import parse_srt
@@ -151,3 +155,41 @@ def test_verify_item_dry_run_uploads_nothing(server, monkeypatch, tmp_path):
 
 
 import os  # noqa: E402
+
+
+def test_upload_failure_falls_back_to_sidecar(server, monkeypatch, tmp_path):
+    """If POST /Subtitles 415/500s, the corrected srt is written next to the media."""
+    Handler.uploads.clear()
+    media = tmp_path / "movie.mkv"
+    media.write_bytes(os.urandom(300_000))
+    item = Item(id=ITEM_ID, name="Test Movie", type="Movie", path=str(media),
+                runtime_ticks=int(200 * 10_000_000), provider_ids={"Imdb": "tt1"},
+                media_source_id=SOURCE_ID)
+    client = JellyfinClient(server, "k")
+    monkeypatch.setattr(verify_mod, "transcribe_media", lambda *a, **k: fake_words())
+    monkeypatch.setattr(verify_mod.os.path, "exists", lambda p: True)
+    # make the upload endpoint reject with 415
+    orig_do_post = Handler.do_POST
+
+    def do_post(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        if self.path.endswith("/Subtitles"):
+            out = b'{"status":415,"title":"Unsupported Media Type"}'
+            self.send_response(415)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
+        # delegate: emulate refresh 204
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    monkeypatch.setattr(Handler, "do_POST", do_post)
+    cfg = VerifyConfig(language="eng", candidates=2, windows=1, window_seconds=10.0)
+    res = verify_item(client, item, cfg, StubProvider())
+    assert res.action == "aligned"
+    sidecar = tmp_path / "movie.en.srt"
+    assert sidecar.exists(), "corrected srt should be written as sidecar when upload 415s"
+    assert "test this thing" in sidecar.read_text()
